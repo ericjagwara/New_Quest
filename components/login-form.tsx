@@ -187,18 +187,18 @@ export function LoginForm() {
           throw new Error(errorData.detail || `Login failed: ${response.status}`)
         }
 
-        const userData: LoginResponse = await response.json()
-
+        const loginResponse = await response.json()
+        
         const sessionData = {
-          ...userData,
+          ...loginResponse,
           loginTime: Date.now(),
-          expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+          expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
         }
 
         if (typeof window !== "undefined") {
           localStorage.setItem("authUser", JSON.stringify(sessionData))
         }
-
+        
         router.push("/dashboard")
       } else {
         const verifyResponse = await fetch(`${API_BASE_URL}/dashboard/verify-registration-otp`, {

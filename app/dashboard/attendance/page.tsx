@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import { DashboardSidebar } from "@/components/dashboard-sidebar"
 import { DashboardHeader } from "@/components/dashboard-header"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -18,11 +19,13 @@ import { ExportRequestModal } from "@/components/export-request-modal"
 interface AttendanceRecord {
   id: string
   phone: string
-  topic_covered: string
+  subject: string
   students_present: number
   students_absent: number
   absence_reason: string
-  created_at: string
+  district: string
+  teacher_name?: string
+  school?: string
 }
 
 interface UserRecord {
@@ -60,19 +63,33 @@ export default function AttendanceAnalysisPage() {
   const [selectedDistrict, setSelectedDistrict] = useState("all")
   const [selectedSchool, setSelectedSchool] = useState("all")
   const [showExportRequestModal, setShowExportRequestModal] = useState(false)
+  const router = useRouter()
 
   useEffect(() => {
-    const authUser = localStorage.getItem("authUser")
-    if (authUser) {
-      try {
-        setUser(JSON.parse(authUser))
-      } catch {
-        window.location.href = "/"
+    const checkAuth = () => {
+      const authUser = localStorage.getItem("authUser")
+      if (!authUser) {
+        router.push("/")
+        return
       }
-    } else {
-      window.location.href = "/"
+      
+      try {
+        const userData = JSON.parse(authUser)
+        // Check if token is expired
+        if (userData.expiresAt && Date.now() > userData.expiresAt) {
+          localStorage.removeItem("authUser")
+          router.push("/")
+          return
+        }
+        setUser(userData)
+      } catch {
+        localStorage.removeItem("authUser")
+        router.push("/")
+      }
     }
-  }, [])
+
+    checkAuth()
+  }, [router])
 
   useEffect(() => {
     if (user) {
@@ -121,7 +138,7 @@ export default function AttendanceAnalysisPage() {
         (record) =>
           record.teacher_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
           record.school?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          record.topic_covered.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          record.subject.toLowerCase().includes(searchTerm.toLowerCase()) ||
           record.absence_reason.toLowerCase().includes(searchTerm.toLowerCase()),
       )
     }
@@ -184,7 +201,7 @@ export default function AttendanceAnalysisPage() {
   }
 
   if (!user) {
-    return <div>Loading...</div>
+    return <div className="flex items-center justify-center h-screen">Loading...</div>
   }
 
   const absenceReasonsData = processAbsenceReasons(filteredData)
@@ -370,7 +387,7 @@ export default function AttendanceAnalysisPage() {
                         <TableHead className="text-emerald-800 font-semibold">Teacher</TableHead>
                         <TableHead className="text-emerald-800 font-semibold">School</TableHead>
                         <TableHead className="text-emerald-800 font-semibold">District</TableHead>
-                        <TableHead className="text-emerald-800 font-semibold">Topic Covered</TableHead>
+                        <TableHead className="text-emerald-800 font-semibold">Subject</TableHead>
                         <TableHead className="text-emerald-800 font-semibold text-center">Present</TableHead>
                         <TableHead className="text-emerald-800 font-semibold text-center">Absent</TableHead>
                         <TableHead className="text-emerald-800 font-semibold">Absence Reason</TableHead>
@@ -383,7 +400,7 @@ export default function AttendanceAnalysisPage() {
                             <TableCell className="font-medium text-gray-900">{record.teacher_name}</TableCell>
                             <TableCell className="text-gray-700">{record.school}</TableCell>
                             <TableCell className="text-gray-700">{record.district}</TableCell>
-                            <TableCell className="text-gray-700 max-w-xs truncate">{record.topic_covered}</TableCell>
+                            <TableCell className="text-gray-700 max-w-xs truncate">{record.subject}</TableCell>
                             <TableCell className="text-center">
                               <Badge variant="secondary" className="bg-emerald-100 text-emerald-800">
                                 {record.students_present}
