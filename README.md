@@ -10,7 +10,7 @@
     <img src="https://img.shields.io/badge/Live%20Demo-Online-blue?style=for-the-badge&logo=vercel" alt="Live Demo" />
   </a>
   <br />
-  <a href="https://harmonyrepo.netlify.app/">🌐 harmonyrepo.netlify.app</a>
+  <a href="https://harmonyrepo.netlify.app/"> harmonyrepo.netlify.app</a>
 </p>
 
 ---
@@ -45,8 +45,3 @@
 | Fonts            | Inter, JetBrains Mono              |
 | Hosting          | [Netlify](https://netlify.com/)     |
 
----
-
-
-# 3. Start development server
-pnpm dev
