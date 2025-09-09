@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
-import { LayoutDashboard, BarChart3, ShoppingCart, LogOut, GitPullRequest as FileRequest } from "lucide-react"
+import { LayoutDashboard, BarChart3, ShoppingCart, LogOut, GitPullRequest as FileRequest, School } from "lucide-react"
 import Image from "next/image"
 import { useSession } from "@/hooks/use-session"
 
@@ -10,6 +10,7 @@ interface DashboardSidebarProps {
   user: {
     username: string
     role: string
+    school?: string // Add school property
   }
 }
 
@@ -17,32 +18,44 @@ export function DashboardSidebar({ user }: DashboardSidebarProps) {
   const [activeItem, setActiveItem] = useState("Dashboard")
   const { logout } = useSession()
 
+  // Define menu items based on user role
   const menuItems = [
     {
       name: "Dashboard",
       icon: LayoutDashboard,
       href: "/dashboard",
+      roles: ["superadmin", "manager", "fieldworker", "schooladmin"]
     },
     {
       name: "Attendance Analysis",
       icon: BarChart3,
       href: "/dashboard/attendance",
+      roles: ["superadmin", "manager", "fieldworker"]
+    },
+    {
+      name: "School Dashboard",
+      icon: School,
+      href: "/dashboard/school",
+      roles: ["schooladmin"]
     },
     {
       name: "Hygiene Quest Sales",
       icon: ShoppingCart,
       href: "/dashboard/sales",
+      roles: ["superadmin", "manager"]
     },
-    ...(user.role === "superadmin"
-      ? [
-          {
-            name: "Export Requests",
-            icon: FileRequest,
-            href: "/dashboard/export-requests",
-          },
-        ]
-      : []),
+    {
+      name: "Export Requests",
+      icon: FileRequest,
+      href: "/dashboard/export-requests",
+      roles: ["superadmin"]
+    },
   ]
+
+  // Filter menu items based on user role
+  const filteredMenuItems = menuItems.filter(item => 
+    item.roles.includes(user.role)
+  )
 
   const handleLogout = () => {
     logout()
@@ -69,13 +82,18 @@ export function DashboardSidebar({ user }: DashboardSidebarProps) {
           </div>
           <div>
             <h2 className="text-sm font-semibold text-emerald-100">Hygiene Quest</h2>
+            {user.role === "schooladmin" && user.school && (
+              <p className="text-xs text-emerald-300 mt-1 truncate max-w-[150px]">
+                {user.school}
+              </p>
+            )}
           </div>
         </div>
       </div>
 
       {/* Navigation Menu */}
       <nav className="flex-1 px-4 py-6 space-y-2">
-        {menuItems.map((item) => {
+        {filteredMenuItems.map((item) => {
           const Icon = item.icon
           return (
             <button
@@ -100,6 +118,9 @@ export function DashboardSidebar({ user }: DashboardSidebarProps) {
           <p className="text-sm text-emerald-300">Logged in as:</p>
           <p className="text-sm font-semibold capitalize text-emerald-100">{user.username}</p>
           <p className="text-xs text-emerald-400 capitalize">{user.role}</p>
+          {user.role === "schooladmin" && user.school && (
+            <p className="text-xs text-emerald-300 mt-1">School: {user.school}</p>
+          )}
         </div>
 
         {/* Program Badge */}

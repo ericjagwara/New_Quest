@@ -27,6 +27,7 @@ interface LoginResponse {
   phone: string
   name: string
   role: string
+  school?: string
 }
 
 interface ApiError extends Error {
@@ -41,6 +42,7 @@ export function LoginForm() {
   const [otp, setOtp] = useState("")
   const [name, setName] = useState("")
   const [role, setRole] = useState("fieldworker")
+  const [loginRole, setLoginRole] = useState("fieldworker") // Separate state for login role
   const [error, setError] = useState("")
   const [success, setSuccess] = useState("")
   const [isLoading, setIsLoading] = useState(false)
@@ -88,6 +90,50 @@ export function LoginForm() {
     setSuccess("")
 
     try {
+      // For school admin login, we need to check if the phone exists in users table
+      if (isLogin && loginRole === "schooladmin") {
+        // Check if phone exists in users table
+        const checkResponse = await fetch(`${API_BASE_URL}/check-registration/${phone}`)
+        
+        if (checkResponse.ok) {
+          const userData = await checkResponse.json()
+          if (userData.registered) {
+            // Phone exists, proceed with OTP
+            const endpoint = `${API_BASE_URL}/send-otp`
+            
+            const controller = new AbortController()
+            const timeoutId = setTimeout(() => controller.abort(), 30000)
+
+            const response = await fetch(endpoint, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ phone }),
+              signal: controller.signal,
+            })
+
+            clearTimeout(timeoutId)
+
+            if (!response.ok) {
+              const errorData = await response.json().catch(() => ({ detail: "Network error occurred" }))
+              throw new Error(errorData.detail || `Server error: ${response.status}`)
+            }
+
+            setStep("otp")
+            setSuccess("OTP sent to your phone number")
+            startCountdown()
+            setIsLoading(false)
+            return
+          } else {
+            throw new Error("This phone number is not registered as a school. Please register first.")
+          }
+        } else {
+          throw new Error("Failed to check registration status.")
+        }
+      }
+
+      // For other roles, use the dashboard endpoints
       const endpoint = isLogin
         ? `${API_BASE_URL}/dashboard/send-login-otp`
         : `${API_BASE_URL}/dashboard/send-registration-otp`
@@ -132,9 +178,12 @@ export function LoginForm() {
     setSuccess("")
 
     try {
-      const endpoint = isLogin
-        ? `${API_BASE_URL}/dashboard/send-login-otp`
-        : `${API_BASE_URL}/dashboard/send-registration-otp`
+      // For school admin, use the main OTP endpoint
+      const endpoint = loginRole === "schooladmin" 
+        ? `${API_BASE_URL}/send-otp`
+        : isLogin
+          ? `${API_BASE_URL}/dashboard/send-login-otp`
+          : `${API_BASE_URL}/dashboard/send-registration-otp`
 
       const response = await fetch(endpoint, {
         method: "POST",
@@ -171,36 +220,82 @@ export function LoginForm() {
       const timeoutId = setTimeout(() => controller.abort(), 30000)
 
       if (isLogin) {
-        const response = await fetch(`${API_BASE_URL}/dashboard/login`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ phone, otp }),
-          signal: controller.signal,
-        })
+        // Handle school admin login differently
+        if (loginRole === "schooladmin") {
+          const verifyResponse = await fetch(`${API_BASE_URL}/verify-otp`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ phone, otp }),
+            signal: controller.signal,
+          })
 
-        clearTimeout(timeoutId)
+          clearTimeout(timeoutId)
 
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ detail: "Login failed" }))
-          throw new Error(errorData.detail || `Login failed: ${response.status}`)
+          if (!verifyResponse.ok) {
+            const errorData = await verifyResponse.json().catch(() => ({ detail: "OTP verification failed" }))
+            throw new Error(errorData.detail || `OTP verification failed: ${verifyResponse.status}`)
+          }
+
+          // Get user data from registration
+          const userResponse = await fetch(`${API_BASE_URL}/check-registration/${phone}`)
+          if (!userResponse.ok) {
+            throw new Error("Failed to fetch user data")
+          }
+
+          const userData = await userResponse.json()
+          
+          // Create school admin session
+          const sessionData = {
+            id: userData.id || 0,
+            phone: phone,
+            name: userData.name || "School Admin",
+            role: "schooladmin",
+            school: userData.school,
+            loginTime: Date.now(),
+            expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
+          }
+
+          if (typeof window !== "undefined") {
+            localStorage.setItem("authUser", JSON.stringify(sessionData))
+          }
+          
+          router.push("/dashboard/school")
+        } else {
+          // Regular dashboard login for other roles
+          const response = await fetch(`${API_BASE_URL}/dashboard/login`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ phone, otp }),
+            signal: controller.signal,
+          })
+
+          clearTimeout(timeoutId)
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ detail: "Login failed" }))
+            throw new Error(errorData.detail || `Login failed: ${response.status}`)
+          }
+
+          const loginResponse = await response.json()
+          
+          const sessionData = {
+            ...loginResponse,
+            loginTime: Date.now(),
+            expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
+          }
+
+          if (typeof window !== "undefined") {
+            localStorage.setItem("authUser", JSON.stringify(sessionData))
+          }
+          
+          router.push("/dashboard")
         }
-
-        const loginResponse = await response.json()
-        
-        const sessionData = {
-          ...loginResponse,
-          loginTime: Date.now(),
-          expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
-        }
-
-        if (typeof window !== "undefined") {
-          localStorage.setItem("authUser", JSON.stringify(sessionData))
-        }
-        
-        router.push("/dashboard")
       } else {
+        // Registration flow
         const verifyResponse = await fetch(`${API_BASE_URL}/dashboard/verify-registration-otp`, {
           method: "POST",
           headers: {
@@ -257,6 +352,7 @@ export function LoginForm() {
     setOtp("")
     setName("")
     setRole("fieldworker")
+    setLoginRole("fieldworker")
     setError("")
     setSuccess("")
     setHasConsented(false)
@@ -334,6 +430,31 @@ export function LoginForm() {
                       required
                     />
                   </div>
+
+                  {isLogin && (
+                    <div className="space-y-2">
+                      <Label htmlFor="loginRole" className="text-emerald-700 font-semibold">
+                        Login As
+                      </Label>
+                      <select
+                        id="loginRole"
+                        value={loginRole}
+                        onChange={(e) => setLoginRole(e.target.value)}
+                        className="w-full border-2 border-emerald-200 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-200 transition-all duration-200 bg-white/80 rounded-md px-3 py-2"
+                        required
+                      >
+                        <option value="fieldworker">Field Worker</option>
+                        <option value="manager">Manager</option>
+                        <option value="superadmin">Super Admin</option>
+                        <option value="schooladmin">School Admin</option>
+                      </select>
+                      {loginRole === "schooladmin" && (
+                        <p className="text-xs text-emerald-600 mt-1">
+                          Use the phone number you registered with for your school
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   {!isLogin && (
                     <>
@@ -429,6 +550,14 @@ export function LoginForm() {
                     />
                   </div>
                   <p className="text-sm text-gray-600 text-center">We've sent a verification code to {phone}</p>
+
+                  {loginRole === "schooladmin" && (
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+                      <p className="text-xs text-emerald-700 text-center">
+                        <strong>School Admin Login:</strong> You will be directed to your school's dashboard after verification.
+                      </p>
+                    </div>
+                  )}
 
                   <div className="flex justify-center">
                     {countdown > 0 ? (
@@ -543,13 +672,16 @@ export function LoginForm() {
                 1. Enter your registered phone number
               </div>
               <div className="bg-white/90 p-3 rounded-lg shadow-sm border border-blue-100 font-semibold bg-gradient-to-r from-blue-700 to-indigo-700 bg-clip-text text-transparent">
-                2. Click "Send OTP" to receive a verification code
+                2. Select your role
               </div>
               <div className="bg-white/90 p-3 rounded-lg shadow-sm border border-blue-100 font-semibold bg-gradient-to-r from-blue-700 to-indigo-700 bg-clip-text text-transparent">
-                3. Enter the OTP sent to your phone to login
+                3. Click "Send OTP" to receive a verification code
+              </div>
+              <div className="bg-white/90 p-3 rounded-lg shadow-sm border border-blue-100 font-semibold bg-gradient-to-r from-blue-700 to-indigo-700 bg-clip-text text-transparent">
+                4. Enter the OTP sent to your phone to login
               </div>
               <div className="bg-white/90 p-3 rounded-lg shadow-sm border border-blue-100">
-                4. Use "Resend OTP" if you don't receive the code within 2 minutes
+                5. Use "Resend OTP" if you don't receive the code within 2 minutes
               </div>
             </div>
           </CardContent>
