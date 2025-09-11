@@ -2,7 +2,15 @@
 
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
-import { LayoutDashboard, BarChart3, ShoppingCart, LogOut, GitPullRequest as FileRequest, School } from "lucide-react"
+import {
+  LayoutDashboard,
+  BarChart3,
+  ShoppingCart,
+  LogOut,
+  GitPullRequest as FileRequest,
+  School,
+  Send,
+} from "lucide-react"
 import Image from "next/image"
 import { useSession } from "@/hooks/use-session"
 
@@ -24,38 +32,42 @@ export function DashboardSidebar({ user }: DashboardSidebarProps) {
       name: "Dashboard",
       icon: LayoutDashboard,
       href: "/dashboard",
-      roles: ["superadmin", "manager", "fieldworker", "schooladmin"]
+      roles: ["superadmin", "manager", "fieldworker", "schooladmin"],
     },
     {
       name: "Attendance Analysis",
       icon: BarChart3,
       href: "/dashboard/attendance",
-      roles: ["superadmin", "manager", "fieldworker"]
+      roles: ["superadmin", "manager", "fieldworker"],
     },
     {
       name: "School Dashboard",
       icon: School,
       href: "/dashboard/school",
-      roles: ["schooladmin"]
+      roles: ["schooladmin"],
     },
     {
       name: "Hygiene Quest Sales",
       icon: ShoppingCart,
       href: "/dashboard/sales",
-      roles: ["superadmin", "manager"]
+      roles: ["superadmin", "manager"],
     },
     {
       name: "Export Requests",
       icon: FileRequest,
       href: "/dashboard/export-requests",
-      roles: ["superadmin"]
+      roles: ["superadmin"],
+    },
+    {
+      name: "My Requests",
+      icon: Send,
+      href: "/dashboard/my-requests",
+      roles: ["fieldworker"],
     },
   ]
 
   // Filter menu items based on user role
-  const filteredMenuItems = menuItems.filter(item => 
-    item.roles.includes(user.role)
-  )
+  const filteredMenuItems = menuItems.filter((item) => item.roles.includes(user.role))
 
   const handleLogout = () => {
     logout()
@@ -83,9 +95,7 @@ export function DashboardSidebar({ user }: DashboardSidebarProps) {
           <div>
             <h2 className="text-sm font-semibold text-emerald-100">Hygiene Quest</h2>
             {user.role === "schooladmin" && user.school && (
-              <p className="text-xs text-emerald-300 mt-1 truncate max-w-[150px]">
-                {user.school}
-              </p>
+              <p className="text-xs text-emerald-300 mt-1 truncate max-w-[150px]">{user.school}</p>
             )}
           </div>
         </div>

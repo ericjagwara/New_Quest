@@ -50,6 +50,7 @@ export interface ExportRequest {
   created_at: string
   approved_by?: string
   approved_at?: string
+  rejection_reason?: string
 }
 
 export interface ApiError {
