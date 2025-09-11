@@ -12,6 +12,7 @@ import { exportToCSV } from "@/lib/csv-export"
 
 interface ExportRequest {
   id: number
+  requester_id: number  // Added missing property
   requester_name: string
   requester_phone: string
   data_type: string
@@ -49,13 +50,14 @@ export function ExportRequestsManager({ user }: ExportRequestsManagerProps) {
         method: "GET",
         headers: {
           "Content-Type": "application/json",
+          "Authorization": `Bearer ${user.access_token}`
         },
       })
-
+  
       if (!response.ok) {
         throw new Error("Failed to fetch export requests")
       }
-
+  
       const data = await response.json()
       setRequests(data)
     } catch (err: any) {
@@ -64,40 +66,76 @@ export function ExportRequestsManager({ user }: ExportRequestsManagerProps) {
       setLoading(false)
     }
   }
-
+  
   const handleRequestAction = async (requestId: number, action: "approve" | "reject") => {
-    setProcessingId(requestId)
-    setError("")
-
+    setProcessingId(requestId);
+    setError("");
+  
     try {
       const response = await fetch(`${API_BASE_URL}/dashboard/export-requests/${requestId}`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
+          "Authorization": `Bearer ${user.access_token}`
         },
         body: JSON.stringify({
           status: action === "approve" ? "approved" : "rejected",
-          approved_by: user.name,
+          approved_by: user.name || "Super Admin",
           approved_at: new Date().toISOString(),
         }),
-      })
-
+      });
+  
       if (!response.ok) {
-        throw new Error(`Failed to ${action} request`)
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `Failed to ${action} request`);
       }
-
-      if (action === "approve") {
-        await generateExportForRequest(requestId)
-      }
-
+  
       // Refresh the requests list
-      await fetchRequests()
+      await fetchRequests();
     } catch (err: any) {
-      setError(err.message || `Failed to ${action} request`)
+      setError(err.message || `Failed to ${action} request`);
     } finally {
-      setProcessingId(null)
+      setProcessingId(null);
+    }
+  };
+  
+  const handleDownloadApprovedData = async (request: ExportRequest) => {
+    try {
+      setError("")
+      const dataResponse = await fetch(
+        `${API_BASE_URL}/attendances`,
+        {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${user.access_token}`
+          },
+        },
+      )
+  
+      if (dataResponse.ok) {
+        const data = await dataResponse.json()
+        const timestamp = new Date().toISOString().split("T")[0]
+        const filename = `attendance-data-${timestamp}-request-${request.id}`
+  
+        exportToCSV(data, filename)
+      } else {
+        throw new Error("Failed to fetch export data")
+      }
+    } catch (err: any) {
+      setError(err.message || "Failed to download export data")
     }
   }
+
+  // Function to check if user can export (currently unused)
+  const canUserExport = (userId: number, dataType: string): boolean => {
+    const userRequests = requests.filter(
+      req => req.requester_id === userId && 
+             req.data_type === dataType && 
+             req.status === "approved"
+    );
+    return userRequests.length > 0;
+  };
 
   const generateExportForRequest = async (requestId: number) => {
     try {
@@ -111,6 +149,7 @@ export function ExportRequestsManager({ user }: ExportRequestsManagerProps) {
           method: "GET",
           headers: {
             "Content-Type": "application/json",
+            "Authorization": `Bearer ${user.access_token}`
           },
         },
       )
@@ -128,33 +167,6 @@ export function ExportRequestsManager({ user }: ExportRequestsManagerProps) {
       }
     } catch (err) {
       console.error("Error generating export:", err)
-    }
-  }
-
-  const handleDownloadApprovedData = async (request: ExportRequest) => {
-    try {
-      setError("")
-      const dataResponse = await fetch(
-        `${API_BASE_URL}/dashboard/${request.data_type.toLowerCase().replace(" ", "-")}`,
-        {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-          },
-        },
-      )
-
-      if (dataResponse.ok) {
-        const data = await dataResponse.json()
-        const timestamp = new Date().toISOString().split("T")[0]
-        const filename = `${request.data_type.toLowerCase().replace(" ", "-")}-${timestamp}-request-${request.id}`
-
-        exportToCSV(data, filename)
-      } else {
-        throw new Error("Failed to fetch export data")
-      }
-    } catch (err: any) {
-      setError(err.message || "Failed to download export data")
     }
   }
 

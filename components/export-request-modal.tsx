@@ -33,55 +33,108 @@ export function ExportRequestModal({ isOpen, onClose, dataType, recordCount, use
 
   const handleSubmitRequest = async () => {
     if (!reason.trim()) {
-      setError("Please provide a reason for the export request")
-      return
+      setError("Please provide a reason for the export request");
+      return;
     }
-
-    setIsSubmitting(true)
-    setError("")
-    setSuccess("")
-
+  
+    setIsSubmitting(true);
+    setError("");
+    setSuccess("");
+  
     try {
+      let userName = "Field Worker";
+      let userPhone = "0000000000";
+      
+      // Try to fetch user details from the dashboard users endpoint
+      try {
+        console.log("Fetching dashboard user details for user_id:", user.user_id);
+        const userDetailsResponse = await fetch(`${API_BASE_URL}/dashboard/users/${user.user_id}`, {
+          method: "GET",
+          headers: {
+            "Authorization": `Bearer ${user.access_token}`,
+            "Content-Type": "application/json"
+          }
+        });
+        
+        if (userDetailsResponse.ok) {
+          const userDetails = await userDetailsResponse.json();
+          console.log("Dashboard user details fetched:", userDetails);
+          userName = userDetails.name || userName;
+          userPhone = userDetails.phone || userPhone;
+        } else {
+          console.warn("Failed to fetch dashboard user details, status:", userDetailsResponse.status);
+          // Try alternative endpoint as fallback
+          try {
+            const altResponse = await fetch(`${API_BASE_URL}/users/${user.user_id}`, {
+              method: "GET",
+              headers: {
+                "Authorization": `Bearer ${user.access_token}`,
+                "Content-Type": "application/json"
+              }
+            });
+            if (altResponse.ok) {
+              const altUserDetails = await altResponse.json();
+              userName = altUserDetails.name || userName;
+              userPhone = altUserDetails.phone || userPhone;
+            }
+          } catch (altError) {
+            console.log("Alternative endpoint also failed:", altError);
+          }
+        }
+      } catch (fetchError) {
+        console.log("User details fetch failed, using fallbacks:", fetchError);
+      }
+  
+      const requestPayload = {
+        requester_id: user.user_id,
+        requester_name: userName,
+        requester_phone: userPhone,
+        data_type: dataType,
+        record_count: Number(recordCount),
+        reason: reason.trim(),
+        status: "pending",
+      };
+  
+      console.log("Submitting export request:", requestPayload);
+  
       const response = await fetch(`${API_BASE_URL}/dashboard/export-requests`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Authorization": `Bearer ${user.access_token}`
         },
-        body: JSON.stringify({
-          requester_id: user.id,
-          requester_name: user.name,
-          requester_phone: user.phone,
-          data_type: dataType,
-          record_count: recordCount,
-          reason: reason.trim(),
-          status: "pending",
-        }),
-      })
-
+        body: JSON.stringify(requestPayload),
+      });
+  
+      const responseData = await response.json();
+  
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ detail: "Failed to submit request" }))
-        throw new Error(errorData.detail || "Failed to submit export request")
+        if (response.status === 422) {
+          const errorDetails = responseData.detail || "Validation failed";
+          throw new Error(`Validation error: ${JSON.stringify(errorDetails)}`);
+        }
+        throw new Error(responseData.detail || "Failed to submit export request");
       }
-
-      setSuccess("Export request submitted successfully! You will be notified when approved.")
+  
+      setSuccess("Export request submitted successfully! You will be notified when approved.");
       setTimeout(() => {
-        onClose()
-        setReason("")
-        setSuccess("")
-      }, 2000)
+        handleClose();
+        setReason("");
+        setSuccess("");
+      }, 2000);
     } catch (err: any) {
-      setError(err.message || "Failed to submit export request")
+      console.error("Error:", err);
+      setError(err.message || "Failed to submit export request");
     } finally {
-      setIsSubmitting(false)
+      setIsSubmitting(false);
     }
-  }
-
+  };
   const handleClose = () => {
     if (!isSubmitting) {
-      onClose()
-      setReason("")
-      setError("")
-      setSuccess("")
+      onClose();
+      setReason("");
+      setError("");
+      setSuccess("");
     }
   }
 

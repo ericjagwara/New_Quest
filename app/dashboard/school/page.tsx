@@ -38,8 +38,173 @@ export default function SchoolDashboardPage() {
   const [attendanceData, setAttendanceData] = useState<AttendanceRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [isBlurred, setIsBlurred] = useState(false)
   const router = useRouter()
 
+  // Screenshot prevention effects
+  useEffect(() => {
+    // 1. CSS-based screenshot prevention
+    const style = document.createElement('style')
+    style.textContent = `
+      .screenshot-protected {
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        -khtml-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      
+      @media print {
+        .screenshot-protected {
+          display: none !important;
+        }
+        body::after {
+          content: "Screenshots and printing are not allowed for this content.";
+          position: fixed;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          font-size: 24px;
+          color: red;
+          z-index: 9999;
+        }
+      }
+      
+      .blur-overlay {
+        filter: blur(10px);
+        pointer-events: none;
+        transition: filter 0.3s ease;
+      }
+    `
+    document.head.appendChild(style)
+
+    return () => {
+      if (document.head.contains(style)) {
+        document.head.removeChild(style)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    // 2. Keyboard shortcuts prevention
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Prevent common screenshot shortcuts
+      const forbiddenKeys = [
+        // Print Screen
+        'PrintScreen',
+        // Windows + Print Screen
+        'F12', // DevTools
+        // Ctrl/Cmd + Shift + S (Firefox screenshot)
+        // Ctrl/Cmd + Shift + I (DevTools)
+        // Ctrl/Cmd + U (View Source)
+      ]
+
+      const isForbiddenCombination = 
+        // Ctrl+Shift+S (Firefox screenshot)
+        (e.ctrlKey && e.shiftKey && e.key === 'S') ||
+        // Ctrl+Shift+I (DevTools)
+        (e.ctrlKey && e.shiftKey && e.key === 'I') ||
+        // Ctrl+U (View Source)
+        (e.ctrlKey && e.key === 'u') ||
+        // F12 (DevTools)
+        e.key === 'F12' ||
+        // Print Screen
+        e.key === 'PrintScreen' ||
+        // Windows + Print Screen
+        (e.metaKey && e.key === 'PrintScreen') ||
+        // Ctrl+P (Print)
+        (e.ctrlKey && e.key === 'p') ||
+        // Cmd combinations on Mac
+        (e.metaKey && e.shiftKey && e.key === 'S') ||
+        (e.metaKey && e.shiftKey && e.key === 'I') ||
+        (e.metaKey && e.key === 'u') ||
+        (e.metaKey && e.key === 'p')
+
+      if (forbiddenKeys.includes(e.key) || isForbiddenCombination) {
+        e.preventDefault()
+        e.stopPropagation()
+        alert('Screenshots and developer tools are disabled for security reasons.')
+        return false
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown, { capture: true })
+    return () => document.removeEventListener('keydown', handleKeyDown, { capture: true })
+  }, [])
+
+  useEffect(() => {
+    // 3. Right-click prevention
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault()
+      return false
+    }
+
+    document.addEventListener('contextmenu', handleContextMenu)
+    return () => document.removeEventListener('contextmenu', handleContextMenu)
+  }, [])
+
+  useEffect(() => {
+    // 4. Mobile screenshot detection (approximate)
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        setIsBlurred(true)
+        // Blur content when tab becomes hidden (potential screenshot attempt)
+        setTimeout(() => setIsBlurred(false), 1000)
+      }
+    }
+
+    // 5. Focus/blur detection for potential screen recording
+    const handleWindowBlur = () => {
+      setIsBlurred(true)
+      setTimeout(() => setIsBlurred(false), 500)
+    }
+
+    const handleWindowFocus = () => {
+      setIsBlurred(false)
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('blur', handleWindowBlur)
+    window.addEventListener('focus', handleWindowFocus)
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('blur', handleWindowBlur)
+      window.removeEventListener('focus', handleWindowFocus)
+    }
+  }, [])
+
+  useEffect(() => {
+    // 6. DevTools detection
+    let devtools = { open: false }
+    
+    const checkDevTools = () => {
+      const threshold = 160
+      
+      if (window.outerHeight - window.innerHeight > threshold || 
+          window.outerWidth - window.innerWidth > threshold) {
+        if (!devtools.open) {
+          devtools.open = true
+          alert('Developer tools detected. Please close them for security reasons.')
+          // Optionally redirect or blur content
+          setIsBlurred(true)
+        }
+      } else {
+        if (devtools.open) {
+          devtools.open = false
+          setIsBlurred(false)
+        }
+      }
+    }
+
+    const interval = setInterval(checkDevTools, 500)
+    return () => clearInterval(interval)
+  }, [])
+
+  // Original authentication and data fetching logic
   useEffect(() => {
     const checkAuth = () => {
       try {
@@ -48,15 +213,12 @@ export default function SchoolDashboardPage() {
           router.push("/")
           return
         }
-        
         const userData = JSON.parse(authUser)
-        // Check if token is expired
         if (userData.expiresAt && Date.now() > userData.expiresAt) {
           localStorage.removeItem("authUser")
           router.push("/")
           return
         }
-        
         setUser(userData)
       } catch (error) {
         console.error("Auth check error:", error)
@@ -64,7 +226,6 @@ export default function SchoolDashboardPage() {
         router.push("/")
       }
     }
-
     checkAuth()
   }, [router])
 
@@ -78,25 +239,18 @@ export default function SchoolDashboardPage() {
     try {
       setLoading(true)
       setError(null)
-
-      // First, get the user's school information
       const usersData = await fetchUsersData()
       const currentUserData = usersData.find(u => u.phone === user?.phone)
-      
       if (!currentUserData) {
         setError("School information not found")
         setLoading(false)
         return
       }
-
-      // Then get attendance data and filter for this school only
       const attendanceResult = await fetchAttendanceData()
       const schoolAttendance = attendanceResult.filter(record => {
         const recordUser = usersData.find(u => u.phone === record.phone)
         return recordUser?.school === currentUserData.school
       })
-
-      // Enhance with teacher names
       const enhancedAttendance = schoolAttendance.map((record) => {
         const user = usersData.find((u) => u.phone === record.phone)
         return {
@@ -106,7 +260,6 @@ export default function SchoolDashboardPage() {
           district: user?.district || "Unknown District",
         }
       })
-
       setAttendanceData(enhancedAttendance)
     } catch (err) {
       console.error("Error fetching school data:", err)
@@ -131,12 +284,20 @@ export default function SchoolDashboardPage() {
   const attendanceRate = totalStudents > 0 ? Math.round((totalPresent / totalStudents) * 100) : 0
 
   return (
-    <div className="flex h-screen bg-gradient-to-br from-emerald-50 to-teal-50">
+    <div className={`flex h-screen bg-gradient-to-br from-emerald-50 to-teal-50 screenshot-protected ${isBlurred ? 'blur-overlay' : ''}`}>
+      {/* Security watermark overlay */}
+      <div 
+        className="fixed inset-0 pointer-events-none z-50 opacity-5"
+        style={{
+          backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'%3E%3Ctext x='50%25' y='50%25' text-anchor='middle' dy='.3em' fill='%23000' font-size='20' transform='rotate(-45 100 100)'%3ECONFIDENTIAL%3C/text%3E%3C/svg%3E")`,
+          backgroundRepeat: 'repeat',
+          backgroundSize: '200px 200px'
+        }}
+      />
+      
       <DashboardSidebar user={user} />
-
       <div className="flex-1 flex flex-col overflow-hidden">
         <DashboardHeader user={user} />
-
         <main className="flex-1 overflow-x-hidden overflow-y-auto p-6">
           <div className="space-y-6">
             <div className="flex items-center space-x-2 text-sm text-emerald-600">
@@ -146,10 +307,14 @@ export default function SchoolDashboardPage() {
               <span>/</span>
               <span className="font-medium">School Dashboard</span>
             </div>
-
+            
             <div className="flex items-center justify-between">
               <h1 className="text-3xl font-bold text-emerald-800">School Dashboard</h1>
-              <Button onClick={fetchSchoolData} disabled={loading} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+              <Button 
+                onClick={fetchSchoolData} 
+                disabled={loading}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white"
+              >
                 <RefreshCw className={`w-4 h-4 mr-2 ${loading ? "animate-spin" : ""}`} />
                 Refresh Data
               </Button>
@@ -158,9 +323,9 @@ export default function SchoolDashboardPage() {
             {error && (
               <div className="bg-red-50 border border-red-200 rounded-lg p-4">
                 <p className="text-red-800 text-sm mb-3">{error}</p>
-                <Button
-                  onClick={fetchSchoolData}
-                  size="sm"
+                <Button 
+                  onClick={fetchSchoolData} 
+                  size="sm" 
                   variant="outline"
                   className="text-red-700 border-red-300 hover:bg-red-100 bg-transparent"
                 >
@@ -179,7 +344,7 @@ export default function SchoolDashboardPage() {
                   </div>
                 </CardContent>
               </Card>
-
+              
               <Card className="bg-gradient-to-r from-blue-500 to-cyan-600 text-white shadow-lg">
                 <CardContent className="p-6">
                   <div className="text-center">
@@ -188,7 +353,7 @@ export default function SchoolDashboardPage() {
                   </div>
                 </CardContent>
               </Card>
-
+              
               <Card className="bg-gradient-to-r from-purple-500 to-pink-600 text-white shadow-lg">
                 <CardContent className="p-6">
                   <div className="text-center">

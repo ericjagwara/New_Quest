@@ -178,28 +178,55 @@ export default function AttendanceAnalysisPage() {
     return "default"
   }
 
-  const handleExportData = () => {
-    if (filteredData.length === 0) {
-      alert("No data to export")
-      return
-    }
-
-    if (user?.role === "fieldworker") {
-      setShowExportRequestModal(true)
-      return
-    }
-
-    if (user?.role === "superadmin" || user?.role === "manager") {
-      const exportData = formatAttendanceDataForExport(filteredData)
-      const timestamp = new Date().toISOString().split("T")[0]
-      const filename = `attendance-data-${timestamp}`
-      exportToCSV(exportData, filename)
-      return
-    }
-
-    setShowExportRequestModal(true)
+  // Update the handleExportData function in attendance/page.tsx
+const handleExportData = async () => {
+  if (filteredData.length === 0) {
+    alert("No data to export");
+    return;
   }
 
+  // Check if user has permission to export
+  if (user?.role === "fieldworker") {
+    try {
+      const response = await fetch(`${API_BASE_URL}/dashboard/export-requests/user/${user.id}`, {
+        headers: {
+          "Authorization": `Bearer ${user.access_token}`
+        }
+      });
+      
+      if (response.ok) {
+        const approvedRequests = await response.json();
+        const canExport = approvedRequests.some((req: any) => 
+          req.data_type === "Attendance Analysis" && req.status === "approved"
+        );
+        
+        if (canExport) {
+          // User can export - proceed with download
+          const exportData = formatAttendanceDataForExport(filteredData);
+          const timestamp = new Date().toISOString().split("T")[0];
+          const filename = `attendance-data-${timestamp}`;
+          exportToCSV(exportData, filename);
+        } else {
+          // User needs to request permission
+          setShowExportRequestModal(true);
+        }
+      }
+    } catch (error) {
+      console.error("Error checking export permissions:", error);
+      setShowExportRequestModal(true);
+    }
+    return;
+  }
+
+  // Superadmins and managers can export directly
+  if (user?.role === "superadmin" || user?.role === "manager") {
+    const exportData = formatAttendanceDataForExport(filteredData);
+    const timestamp = new Date().toISOString().split("T")[0];
+    const filename = `attendance-data-${timestamp}`;
+    exportToCSV(exportData, filename);
+    return;
+  }
+};
   if (!user) {
     return <div className="flex items-center justify-center h-screen">Loading...</div>
   }
