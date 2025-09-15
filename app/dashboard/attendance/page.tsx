@@ -46,6 +46,9 @@ interface User {
   district?: string
 }
 
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://hygienequestemdpoints.onrender.com";
+
 interface EnhancedAttendanceRecord extends AttendanceRecord {
   teacher_name?: string
   school?: string
@@ -179,54 +182,65 @@ export default function AttendanceAnalysisPage() {
   }
 
   // Update the handleExportData function in attendance/page.tsx
-const handleExportData = async () => {
-  if (filteredData.length === 0) {
-    alert("No data to export");
-    return;
-  }
-
-  // Check if user has permission to export
-  if (user?.role === "fieldworker") {
-    try {
-      const response = await fetch(`${API_BASE_URL}/dashboard/export-requests/user/${user.id}`, {
-        headers: {
-          "Authorization": `Bearer ${user.access_token}`
+  const handleExportData = async () => {
+    if (filteredData.length === 0) {
+      alert("No data to export");
+      return;
+    }
+  
+    // Check if user has permission to export
+    if (user?.role === "fieldworker") {
+      try {
+        // Make sure user.user_id is defined
+        if (!user.user_id) {
+          console.error("User ID is undefined:", user);
+          setShowExportRequestModal(true);
+          return;
         }
-      });
-      
-      if (response.ok) {
-        const approvedRequests = await response.json();
-        const canExport = approvedRequests.some((req: any) => 
-          req.data_type === "Attendance Analysis" && req.status === "approved"
-        );
+  
+        const response = await fetch(`${API_BASE_URL}/dashboard/export-requests/user/${user.user_id}`, {
+          headers: {
+            "Authorization": `Bearer ${user.access_token}`,
+            "Content-Type": "application/json"
+          }
+        });
         
-        if (canExport) {
-          // User can export - proceed with download
-          const exportData = formatAttendanceDataForExport(filteredData);
-          const timestamp = new Date().toISOString().split("T")[0];
-          const filename = `attendance-data-${timestamp}`;
-          exportToCSV(exportData, filename);
+        if (response.ok) {
+          const approvedRequests = await response.json();
+          const canExport = approvedRequests.some((req: any) => 
+            req.data_type === "Attendance Analysis" && req.status === "approved"
+          );
+          
+          if (canExport) {
+            // User can export - proceed with download
+            const exportData = formatAttendanceDataForExport(filteredData);
+            const timestamp = new Date().toISOString().split("T")[0];
+            const filename = `attendance-data-${timestamp}`;
+            exportToCSV(exportData, filename);
+          } else {
+            // User needs to request permission
+            setShowExportRequestModal(true);
+          }
         } else {
-          // User needs to request permission
+          console.error("Failed to check export permissions:", response.status);
           setShowExportRequestModal(true);
         }
+      } catch (error) {
+        console.error("Error checking export permissions:", error);
+        setShowExportRequestModal(true);
       }
-    } catch (error) {
-      console.error("Error checking export permissions:", error);
-      setShowExportRequestModal(true);
+      return;
     }
-    return;
-  }
-
-  // Superadmins and managers can export directly
-  if (user?.role === "superadmin" || user?.role === "manager") {
-    const exportData = formatAttendanceDataForExport(filteredData);
-    const timestamp = new Date().toISOString().split("T")[0];
-    const filename = `attendance-data-${timestamp}`;
-    exportToCSV(exportData, filename);
-    return;
-  }
-};
+  
+    // Superadmins and managers can export directly
+    if (user?.role === "superadmin" || user?.role === "manager") {
+      const exportData = formatAttendanceDataForExport(filteredData);
+      const timestamp = new Date().toISOString().split("T")[0];
+      const filename = `attendance-data-${timestamp}`;
+      exportToCSV(exportData, filename);
+      return;
+    }
+  };
   if (!user) {
     return <div className="flex items-center justify-center h-screen">Loading...</div>
   }
@@ -469,5 +483,5 @@ const handleExportData = async () => {
         user={user}
       />
     </div>
-  )
+  ) 
 }
