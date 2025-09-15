@@ -4,40 +4,55 @@ import { useState, useEffect } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ExportRequestModal } from "@/components/export-request-modal"
-import { FileText, Clock, CheckCircle, XCircle, Calendar, User, AlertCircle } from "lucide-react"
-import type { ExportRequest } from "@/lib/types"
+import { Button } from "@/components/ui/button"
+import { FileText, Clock, CheckCircle, XCircle, Calendar, User, Download } from "lucide-react"
+import { exportToCSV } from "@/lib/csv-export"
+
+interface ExportRequest {
+  id: number
+  requester_id: number
+  requester_name: string
+  requester_phone: string
+  data_type: string
+  record_count: number
+  reason: string
+  status: "pending" | "approved" | "rejected"
+  created_at: string
+  approved_by?: string
+  approved_at?: string
+}
 
 interface MyRequestsManagerProps {
   user: {
+    id: number
     phone: string
     name: string
     role: string
+    access_token: string
   }
 }
 
 export function MyRequestsManager({ user }: MyRequestsManagerProps) {
   const [requests, setRequests] = useState<ExportRequest[]>([])
   const [loading, setLoading] = useState(true)
-  const [showModal, setShowModal] = useState(false)
   const [activeTab, setActiveTab] = useState("all")
+
+  const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://hygienequestemdpoints.onrender.com"
 
   const fetchMyRequests = async () => {
     try {
       setLoading(true)
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/export-requests?requester_phone=${user.phone}`,
-        {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-          },
+      const response = await fetch(`${API_BASE_URL}/dashboard/export-requests/user/${user.id}`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${user.access_token}`
         },
-      )
+      })
 
       if (response.ok) {
         const data = await response.json()
-        setRequests(data.requests || [])
+        setRequests(data)
       } else {
         console.error("Failed to fetch requests")
         setRequests([])
@@ -52,11 +67,31 @@ export function MyRequestsManager({ user }: MyRequestsManagerProps) {
 
   useEffect(() => {
     fetchMyRequests()
-  }, [user.phone])
+  }, [user.id, user.access_token])
 
-  const handleRequestSubmitted = () => {
-    setShowModal(false)
-    fetchMyRequests()
+  const handleDownloadApprovedData = async (request: ExportRequest) => {
+    try {
+      // Fetch the actual data (non-masked) for approved requests
+      const dataResponse = await fetch(`${API_BASE_URL}/attendances`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${user.access_token}`,
+        },
+      })
+
+      if (dataResponse.ok) {
+        const data = await dataResponse.json()
+        const timestamp = new Date().toISOString().split("T")[0]
+        const filename = `${request.data_type.toLowerCase().replace(" ", "-")}-${timestamp}-approved-${request.id}`
+
+        exportToCSV(data, filename)
+      } else {
+        console.error("Failed to fetch export data")
+      }
+    } catch (err) {
+      console.error("Error downloading data:", err)
+    }
   }
 
   const getStatusIcon = (status: string) => {
@@ -68,7 +103,7 @@ export function MyRequestsManager({ user }: MyRequestsManagerProps) {
       case "rejected":
         return <XCircle className="w-4 h-4 text-red-500" />
       default:
-        return <AlertCircle className="w-4 h-4 text-gray-500" />
+        return <Clock className="w-4 h-4 text-gray-500" />
     }
   }
 
@@ -165,11 +200,6 @@ export function MyRequestsManager({ user }: MyRequestsManagerProps) {
         </Card>
       </div>
 
-      {/* Actions */}
-      <div className="flex justify-between items-center">
-        <p className="text-sm text-muted-foreground">Track all your export requests and their status</p>
-      </div>
-
       {/* Requests Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="grid w-full grid-cols-4">
@@ -180,73 +210,26 @@ export function MyRequestsManager({ user }: MyRequestsManagerProps) {
         </TabsList>
 
         <TabsContent value="all" className="space-y-4">
-          <RequestsList requests={filterRequests("all")} />
+          <RequestsList requests={filterRequests("all")} onDownload={handleDownloadApprovedData} />
         </TabsContent>
 
         <TabsContent value="pending" className="space-y-4">
-          <RequestsList requests={filterRequests("pending")} />
+          <RequestsList requests={filterRequests("pending")} onDownload={handleDownloadApprovedData} />
         </TabsContent>
 
         <TabsContent value="approved" className="space-y-4">
-          <RequestsList requests={filterRequests("approved")} />
+          <RequestsList requests={filterRequests("approved")} onDownload={handleDownloadApprovedData} />
         </TabsContent>
 
         <TabsContent value="rejected" className="space-y-4">
-          <RequestsList requests={filterRequests("rejected")} />
+          <RequestsList requests={filterRequests("rejected")} onDownload={handleDownloadApprovedData} />
         </TabsContent>
       </Tabs>
-
-      {/* Export Request Modal */}
-      {showModal && (
-        <ExportRequestModal
-          user={user}
-          onClose={() => setShowModal(false)}
-          onRequestSubmitted={handleRequestSubmitted}
-        />
-      )}
     </div>
   )
 }
 
-function RequestsList({ requests }: { requests: ExportRequest[] }) {
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case "pending":
-        return <Clock className="w-4 h-4 text-yellow-500" />
-      case "approved":
-        return <CheckCircle className="w-4 h-4 text-green-500" />
-      case "rejected":
-        return <XCircle className="w-4 h-4 text-red-500" />
-      default:
-        return <AlertCircle className="w-4 h-4 text-gray-500" />
-    }
-  }
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "pending":
-        return (
-          <Badge variant="secondary" className="bg-yellow-100 text-yellow-800">
-            Pending
-          </Badge>
-        )
-      case "approved":
-        return (
-          <Badge variant="secondary" className="bg-green-100 text-green-800">
-            Approved
-          </Badge>
-        )
-      case "rejected":
-        return (
-          <Badge variant="secondary" className="bg-red-100 text-red-800">
-            Rejected
-          </Badge>
-        )
-      default:
-        return <Badge variant="outline">Unknown</Badge>
-    }
-  }
-
+function RequestsList({ requests, onDownload }: { requests: ExportRequest[], onDownload: (request: ExportRequest) => void }) {
   if (requests.length === 0) {
     return (
       <Card>
@@ -266,10 +249,26 @@ function RequestsList({ requests }: { requests: ExportRequest[] }) {
           <CardHeader>
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2">
-                {getStatusIcon(request.status)}
+                {request.status === "pending" && <Clock className="w-4 h-4 text-yellow-500" />}
+                {request.status === "approved" && <CheckCircle className="w-4 h-4 text-green-500" />}
+                {request.status === "rejected" && <XCircle className="w-4 h-4 text-red-500" />}
                 <CardTitle className="text-lg">{request.data_type} Export Request</CardTitle>
               </div>
-              {getStatusBadge(request.status)}
+              {request.status === "pending" && (
+                <Badge variant="secondary" className="bg-yellow-100 text-yellow-800">
+                  Pending
+                </Badge>
+              )}
+              {request.status === "approved" && (
+                <Badge variant="secondary" className="bg-green-100 text-green-800">
+                  Approved
+                </Badge>
+              )}
+              {request.status === "rejected" && (
+                <Badge variant="secondary" className="bg-red-100 text-red-800">
+                  Rejected
+                </Badge>
+              )}
             </div>
             <CardDescription>Requested {request.record_count} records</CardDescription>
           </CardHeader>
@@ -306,18 +305,26 @@ function RequestsList({ requests }: { requests: ExportRequest[] }) {
                     </div>
                   )}
                 </div>
+                <div className="mt-3">
+                  <Button 
+                    onClick={() => onDownload(request)}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                  >
+                    <Download className="w-4 h-4 mr-2" />
+                    Download Data
+                  </Button>
+                </div>
               </div>
             )}
 
-            {request.status === "rejected" && request.rejection_reason && (
+            {request.status === "rejected" && (
               <div className="bg-red-50 p-3 rounded-lg">
                 <div className="flex items-center space-x-2 text-red-800">
                   <XCircle className="w-4 h-4" />
                   <span className="font-medium">Rejected</span>
                 </div>
                 <div className="mt-1 text-sm text-red-700">
-                  <p className="font-medium">Reason:</p>
-                  <p>{request.rejection_reason}</p>
+                  <p>Your export request was not approved.</p>
                 </div>
               </div>
             )}
