@@ -9,7 +9,6 @@ import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Sparkles } from "lucide-react"
 import Image from "next/image"
-import { Checkbox } from "@/components/ui/checkbox"
 
 interface User {
   id: number
@@ -36,17 +35,13 @@ interface ApiError extends Error {
 }
 
 export function LoginForm() {
-  const [isLogin, setIsLogin] = useState(true)
   const [step, setStep] = useState<"initial" | "otp">("initial")
   const [phone, setPhone] = useState("")
   const [otp, setOtp] = useState("")
-  const [name, setName] = useState("")
-  const [role, setRole] = useState("fieldworker")
-  const [loginRole, setLoginRole] = useState("fieldworker") // Separate state for login role
+  const [loginRole, setLoginRole] = useState("fieldworker")
   const [error, setError] = useState("")
   const [success, setSuccess] = useState("")
   const [isLoading, setIsLoading] = useState(false)
-  const [hasConsented, setHasConsented] = useState(false)
   const [isResending, setIsResending] = useState(false)
   const [countdown, setCountdown] = useState(0)
   const [canResend, setCanResend] = useState(false)
@@ -80,18 +75,13 @@ export function LoginForm() {
   const handleSendOTP = async (e: React.FormEvent) => {
     e.preventDefault()
 
-    if (!isLogin && !hasConsented) {
-      setError("Please accept the privacy policy and terms of service to continue.")
-      return
-    }
-
     setIsLoading(true)
     setError("")
     setSuccess("")
 
     try {
       // For school admin login, we need to check if the phone exists in users table
-      if (isLogin && loginRole === "schooladmin") {
+      if (loginRole === "schooladmin") {
         // Check if phone exists in users table
         const checkResponse = await fetch(`${API_BASE_URL}/check-registration/${phone}`)
         
@@ -126,7 +116,7 @@ export function LoginForm() {
             setIsLoading(false)
             return
           } else {
-            throw new Error("This phone number is not registered as a school. Please register first.")
+            throw new Error("This phone number is not registered as a school. Please contact support.")
           }
         } else {
           throw new Error("Failed to check registration status.")
@@ -134,9 +124,7 @@ export function LoginForm() {
       }
 
       // For other roles, use the dashboard endpoints
-      const endpoint = isLogin
-        ? `${API_BASE_URL}/dashboard/send-login-otp`
-        : `${API_BASE_URL}/dashboard/send-registration-otp`
+      const endpoint = `${API_BASE_URL}/dashboard/send-login-otp`
 
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), 30000)
@@ -181,9 +169,7 @@ export function LoginForm() {
       // For school admin, use the main OTP endpoint
       const endpoint = loginRole === "schooladmin" 
         ? `${API_BASE_URL}/send-otp`
-        : isLogin
-          ? `${API_BASE_URL}/dashboard/send-login-otp`
-          : `${API_BASE_URL}/dashboard/send-registration-otp`
+        : `${API_BASE_URL}/dashboard/send-login-otp`
 
       const response = await fetch(endpoint, {
         method: "POST",
@@ -219,84 +205,9 @@ export function LoginForm() {
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), 30000)
 
-      if (isLogin) {
-        // Handle school admin login differently
-        if (loginRole === "schooladmin") {
-          const verifyResponse = await fetch(`${API_BASE_URL}/verify-otp`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ phone, otp }),
-            signal: controller.signal,
-          })
-
-          clearTimeout(timeoutId)
-
-          if (!verifyResponse.ok) {
-            const errorData = await verifyResponse.json().catch(() => ({ detail: "OTP verification failed" }))
-            throw new Error(errorData.detail || `OTP verification failed: ${verifyResponse.status}`)
-          }
-
-          // Get user data from registration
-          const userResponse = await fetch(`${API_BASE_URL}/check-registration/${phone}`)
-          if (!userResponse.ok) {
-            throw new Error("Failed to fetch user data")
-          }
-
-          const userData = await userResponse.json()
-          
-          // Create school admin session
-          const sessionData = {
-            id: userData.id || 0,
-            phone: phone,
-            name: userData.name || "School Admin",
-            role: "schooladmin",
-            school: userData.school,
-            loginTime: Date.now(),
-            expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
-          }
-
-          if (typeof window !== "undefined") {
-            localStorage.setItem("authUser", JSON.stringify(sessionData))
-          }
-          
-          router.push("/dashboard/school")
-        } else {
-          // Regular dashboard login for other roles
-          const response = await fetch(`${API_BASE_URL}/dashboard/login`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ phone, otp }),
-            signal: controller.signal,
-          })
-
-          clearTimeout(timeoutId)
-
-          if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ detail: "Login failed" }))
-            throw new Error(errorData.detail || `Login failed: ${response.status}`)
-          }
-
-          const loginResponse = await response.json()
-          
-          const sessionData = {
-            ...loginResponse,
-            loginTime: Date.now(),
-            expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
-          }
-
-          if (typeof window !== "undefined") {
-            localStorage.setItem("authUser", JSON.stringify(sessionData))
-          }
-          
-          router.push("/dashboard")
-        }
-      } else {
-        // Registration flow
-        const verifyResponse = await fetch(`${API_BASE_URL}/dashboard/verify-registration-otp`, {
+      // Handle school admin login differently
+      if (loginRole === "schooladmin") {
+        const verifyResponse = await fetch(`${API_BASE_URL}/verify-otp`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -305,34 +216,68 @@ export function LoginForm() {
           signal: controller.signal,
         })
 
+        clearTimeout(timeoutId)
+
         if (!verifyResponse.ok) {
-          clearTimeout(timeoutId)
           const errorData = await verifyResponse.json().catch(() => ({ detail: "OTP verification failed" }))
           throw new Error(errorData.detail || `OTP verification failed: ${verifyResponse.status}`)
         }
 
-        const registerResponse = await fetch(`${API_BASE_URL}/dashboard/register`, {
+        // Get user data from registration
+        const userResponse = await fetch(`${API_BASE_URL}/check-registration/${phone}`)
+        if (!userResponse.ok) {
+          throw new Error("Failed to fetch user data")
+        }
+
+        const userData = await userResponse.json()
+        
+        // Create school admin session
+        const sessionData = {
+          id: userData.id || 0,
+          phone: phone,
+          name: userData.name || "School Admin",
+          role: "schooladmin",
+          school: userData.school,
+          loginTime: Date.now(),
+          expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
+        }
+
+        if (typeof window !== "undefined") {
+          localStorage.setItem("authUser", JSON.stringify(sessionData))
+        }
+        
+        router.push("/dashboard/school")
+      } else {
+        // Regular dashboard login for other roles
+        const response = await fetch(`${API_BASE_URL}/dashboard/login`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ phone, name, role }),
+          body: JSON.stringify({ phone, otp }),
           signal: controller.signal,
         })
 
         clearTimeout(timeoutId)
 
-        if (!registerResponse.ok) {
-          const errorData = await registerResponse.json().catch(() => ({ detail: "Registration failed" }))
-          throw new Error(errorData.detail || `Registration failed: ${registerResponse.status}`)
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ detail: "Login failed" }))
+          throw new Error(errorData.detail || `Login failed: ${response.status}`)
         }
 
-        setSuccess("Registration successful! Please login with your phone number.")
+        const loginResponse = await response.json()
+        
+        const sessionData = {
+          ...loginResponse,
+          loginTime: Date.now(),
+          expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
+        }
 
-        setTimeout(() => {
-          setIsLogin(true)
-          resetForm()
-        }, 2000)
+        if (typeof window !== "undefined") {
+          localStorage.setItem("authUser", JSON.stringify(sessionData))
+        }
+        
+        router.push("/dashboard")
       }
     } catch (err) {
       const error = err as ApiError
@@ -350,12 +295,8 @@ export function LoginForm() {
     setStep("initial")
     setPhone("")
     setOtp("")
-    setName("")
-    setRole("fieldworker")
-    setLoginRole("fieldworker")
     setError("")
     setSuccess("")
-    setHasConsented(false)
     setCountdown(0)
     setCanResend(false)
   }
@@ -401,14 +342,12 @@ export function LoginForm() {
         <div className="relative bg-white/95 m-0.5 rounded-lg">
           <CardHeader className="space-y-1 bg-gradient-to-r from-emerald-50 via-teal-50 to-cyan-50 rounded-t-lg">
             <CardTitle className="text-xl text-center bg-gradient-to-r from-emerald-700 to-teal-700 bg-clip-text text-transparent">
-              {isLogin ? "Sign In" : "Create Account"}
+              Sign In
             </CardTitle>
             <CardDescription className="text-center bg-gradient-to-r from-emerald-600 to-teal-600 bg-clip-text text-transparent font-medium">
-              {isLogin
+              {step === "initial" 
                 ? "Enter your phone number to receive an OTP"
-                : step === "initial"
-                  ? "Enter your phone number to register"
-                  : "Complete your registration"}
+                : "Complete your login"}
             </CardDescription>
           </CardHeader>
 
@@ -431,105 +370,35 @@ export function LoginForm() {
                     />
                   </div>
 
-                  {isLogin && (
-                    <div className="space-y-2">
-                      <Label htmlFor="loginRole" className="text-emerald-700 font-semibold">
-                        Login As
-                      </Label>
-                      <select
-                        id="loginRole"
-                        value={loginRole}
-                        onChange={(e) => setLoginRole(e.target.value)}
-                        className="w-full border-2 border-emerald-200 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-200 transition-all duration-200 bg-white/80 rounded-md px-3 py-2"
-                        required
-                      >
-                        <option value="fieldworker">Field Worker</option>
-                        <option value="manager">Manager</option>
-                        <option value="superadmin">Super Admin</option>
-                        <option value="schooladmin">School Admin</option>
-                      </select>
-                      {loginRole === "schooladmin" && (
-                        <p className="text-xs text-emerald-600 mt-1">
-                          Use the phone number you registered with for your school
-                        </p>
-                      )}
-                    </div>
-                  )}
-
-                  {!isLogin && (
-                    <>
-                      <div className="space-y-2">
-                        <Label htmlFor="name" className="text-emerald-700 font-semibold">
-                          Full Name
-                        </Label>
-                        <Input
-                          id="name"
-                          type="text"
-                          placeholder="Enter your full name"
-                          value={name}
-                          onChange={(e) => setName(e.target.value)}
-                          className="border-2 border-emerald-200 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-200 transition-all duration-200 bg-white/80"
-                          required
-                        />
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label htmlFor="role" className="text-emerald-700 font-semibold">
-                          Role
-                        </Label>
-                        <select
-                          id="role"
-                          value={role}
-                          onChange={(e) => setRole(e.target.value)}
-                          className="w-full border-2 border-emerald-200 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-200 transition-all duration-200 bg-white/80 rounded-md px-3 py-2"
-                          required
-                        >
-                          <option value="fieldworker">Field Worker</option>
-                          <option value="manager">Manager</option>
-                          <option value="superadmin">Super Admin</option>
-                        </select>
-                      </div>
-
-                      <div className="space-y-3 pt-2">
-                        <div className="flex items-start space-x-3">
-                          <Checkbox
-                            id="consent"
-                            checked={hasConsented}
-                            onCheckedChange={(checked) => setHasConsented(checked as boolean)}
-                            className="mt-1"
-                          />
-                          <div className="space-y-1">
-                            <Label htmlFor="consent" className="text-sm text-gray-700 leading-relaxed cursor-pointer">
-                              I agree to the collection and processing of my personal data as described in the{" "}
-                              <button
-                                type="button"
-                                className="text-emerald-600 hover:text-emerald-800 underline font-medium"
-                                onClick={() => openSecureLink("/privacy-policy")}
-                              >
-                                Privacy Policy
-                              </button>{" "}
-                              and{" "}
-                              <button
-                                type="button"
-                                className="text-emerald-600 hover:text-emerald-800 underline font-medium"
-                                onClick={() => openSecureLink("/terms-of-service")}
-                              >
-                                Terms of Service
-                              </button>
-                            </Label>
-                          </div>
-                        </div>
-                      </div>
-                    </>
-                  )}
+                  <div className="space-y-2">
+                    <Label htmlFor="loginRole" className="text-emerald-700 font-semibold">
+                      Login As
+                    </Label>
+                    <select
+                      id="loginRole"
+                      value={loginRole}
+                      onChange={(e) => setLoginRole(e.target.value)}
+                      className="w-full border-2 border-emerald-200 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-200 transition-all duration-200 bg-white/80 rounded-md px-3 py-2"
+                      required
+                    >
+                      <option value="fieldworker">Field Worker</option>
+                      <option value="manager">Manager</option>
+                      <option value="superadmin">Super Admin</option>
+                      <option value="schooladmin">School Admin</option>
+                    </select>
+                    {loginRole === "schooladmin" && (
+                      <p className="text-xs text-emerald-600 mt-1">
+                        Use the phone number you registered with for your school
+                      </p>
+                    )}
+                  </div>
 
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mt-4">
                     <h4 className="text-sm font-semibold text-blue-800 mb-2">Data Collection Notice</h4>
                     <p className="text-xs text-blue-700 leading-relaxed">
-                      We collect your phone number and profile information to provide access to the Hygiene Quest
+                      We collect your phone number to provide access to the Hygiene Quest
                       platform. Your data is used to track hygiene education progress in schools and is protected
-                      according to our privacy policy.
-                      {isLogin ? " By logging in, you acknowledge our data practices." : ""}
+                      according to our privacy policy. By logging in, you acknowledge our data practices.
                     </p>
                   </div>
                 </>
@@ -606,48 +475,20 @@ export function LoginForm() {
               >
                 {isLoading
                   ? step === "initial"
-                    ? isLogin
-                      ? "Sending OTP..."
-                      : "Sending OTP..."
-                    : isLogin
-                      ? "Logging in..."
-                      : "Registering..."
+                    ? "Sending OTP..."
+                    : "Logging in..."
                   : step === "initial"
-                    ? isLogin
-                      ? "Send OTP"
-                      : "Send OTP"
-                    : isLogin
-                      ? "Login"
-                      : "Complete Registration"}
+                    ? "Send OTP"
+                    : "Login"}
               </Button>
 
-              {step === "initial" ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsLogin(!isLogin)
-                    resetForm()
-                  }}
-                  className="text-sm bg-gradient-to-r from-emerald-600 to-teal-600 bg-clip-text text-transparent hover:from-emerald-800 hover:to-teal-800 hover:underline font-semibold transition-all duration-200"
-                >
-                  {isLogin ? "Need an account? Register here" : "Already have an account? Login here"}
-                </button>
-              ) : (
+              {step === "otp" && (
                 <button
                   type="button"
                   onClick={() => setStep("initial")}
                   className="text-sm bg-gradient-to-r from-emerald-600 to-teal-600 bg-clip-text text-transparent hover:from-emerald-800 hover:to-teal-800 hover:underline font-semibold transition-all duration-200"
                 >
                   Change phone number
-                </button>
-              )}
-
-              {isLogin && step === "initial" && (
-                <button
-                  type="button"
-                  className="text-sm bg-gradient-to-r from-emerald-600 to-teal-600 bg-clip-text text-transparent hover:from-emerald-800 hover:to-teal-800 hover:underline font-semibold transition-all duration-200"
-                >
-                  Forgot Password?
                 </button>
               )}
             </CardFooter>
@@ -659,7 +500,7 @@ export function LoginForm() {
         © Hygiene Quest 2025
       </div>
 
-      {isLogin && step === "initial" && (
+      {step === "initial" && (
         <Card className="bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 border-2 border-blue-200 shadow-lg relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400"></div>
           <CardContent className="pt-4">
