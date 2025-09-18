@@ -378,7 +378,7 @@ export function LoginForm() {
                     )}
                   </div>
 
-                  <div className="bg-gradient-to-r from-green-50 to-teal-50 border-l-4 border-green-400 rounded-lg p-3 shadow-sm">
+                  <div className="bg-gradient-to-r from-green-50 to-teal-50 border-l-4 border-green-400 rounded-lg p-3 shadow-sm mb-6">
                     <h4 className="text-xs font-bold text-green-900 mb-1">Data Collection Notice</h4>
                     <p className="text-xs text-green-800 leading-relaxed">
                       We collect your phone number for platform access and progress tracking.
@@ -466,10 +466,6 @@ export function LoginForm() {
               <div className="hidden">
                 <p className="text-xs text-teal-600">Need an account? Register here</p>
               </div>
-
-              <p className="text-xs text-teal-600 hover:text-teal-700 hover:underline cursor-pointer font-medium transition-colors duration-200">
-                Forgot Password?
-              </p>
 
               {step === "otp" && (
                 <button
