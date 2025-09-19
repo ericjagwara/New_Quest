@@ -16,17 +16,40 @@ const getAuthToken = (): string | null => {
   }
 };
 
-// Fetch attendance data with authentication
+// Helper function to get export token for managers
+const getExportToken = (): string | null => {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem('export_token');
+};
+
+// Helper function to get current user info
+const getCurrentUser = (): any => {
+  if (typeof window === 'undefined') return null;
+  const authUser = localStorage.getItem('authUser');
+  if (!authUser) return null;
+  
+  try {
+    return JSON.parse(authUser);
+  } catch {
+    return null;
+  }
+};
+
+// Fetch attendance data with authentication and role-based filtering
 export async function fetchAttendanceData(): Promise<AttendanceRecord[]> {
   const token = getAuthToken();
+  const exportToken = getExportToken();
+  const currentUser = getCurrentUser();
   
   try {
     const headers: HeadersInit = {
       "Content-Type": "application/json",
     };
     
-    // Add authorization header if token exists
-    if (token) {
+    // Use export token for managers if available, otherwise use regular token
+    if (exportToken) {
+      headers["Authorization"] = `Bearer ${exportToken}`;
+    } else if (token) {
       headers["Authorization"] = `Bearer ${token}`;
     }
 
@@ -46,8 +69,19 @@ export async function fetchAttendanceData(): Promise<AttendanceRecord[]> {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
 
-    const data = await response.json();
+    let data = await response.json();
     console.log("Successfully fetched attendance data from API");
+    
+    // If user is a school admin, filter data to only show their school
+    if (currentUser && currentUser.role === "schooladmin" && currentUser.school) {
+      // We need to get user data to match schools
+      const usersData = await fetchUsersData();
+      data = data.filter((record: AttendanceRecord) => {
+        const recordUser = usersData.find((u: UserRecord) => u.phone === record.phone);
+        return recordUser?.school === currentUser.school;
+      });
+    }
+    
     return data;
   } catch (error) {
     console.warn("API unavailable, using fallback attendance data:", error);
@@ -102,17 +136,21 @@ export async function fetchAttendanceData(): Promise<AttendanceRecord[]> {
   }
 }
 
-// Fetch user/registration data with authentication
+// Fetch user/registration data with authentication and role-based filtering
 export async function fetchUsersData(): Promise<UserRecord[]> {
   const token = getAuthToken();
+  const exportToken = getExportToken();
+  const currentUser = getCurrentUser();
   
   try {
     const headers: HeadersInit = {
       "Content-Type": "application/json",
     };
     
-    // Add authorization header if token exists
-    if (token) {
+    // Use export token for managers if available, otherwise use regular token
+    if (exportToken) {
+      headers["Authorization"] = `Bearer ${exportToken}`;
+    } else if (token) {
       headers["Authorization"] = `Bearer ${token}`;
     }
 
@@ -132,8 +170,14 @@ export async function fetchUsersData(): Promise<UserRecord[]> {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
 
-    const data = await response.json();
+    let data = await response.json();
     console.log("Successfully fetched users data from API");
+    
+    // If user is a school admin, filter data to only show their school
+    if (currentUser && currentUser.role === "schooladmin" && currentUser.school) {
+      data = data.filter((user: UserRecord) => user.school === currentUser.school);
+    }
+    
     return data;
   } catch (error) {
     console.warn("API unavailable, using fallback users data:", error);
@@ -174,6 +218,43 @@ export async function fetchUsersData(): Promise<UserRecord[]> {
     ];
   }
 }
+
+// Function to clear export token (call this when manager logs out or session expires)
+export const clearExportToken = (): void => {
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem('export_token');
+  }
+};
+
+// Function to check if user has export access (for managers)
+export const hasExportAccess = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  
+  const exportToken = localStorage.getItem('export_token');
+  if (!exportToken) return false;
+  
+  // Check if token is expired (simple check - in real app, decode JWT)
+  const tokenTimestamp = localStorage.getItem('export_token_timestamp');
+  if (tokenTimestamp) {
+    const tokenTime = parseInt(tokenTimestamp, 10);
+    const currentTime = Date.now();
+    // Check if token is older than 30 minutes
+    if (currentTime - tokenTime > 30 * 60 * 1000) {
+      clearExportToken();
+      return false;
+    }
+  }
+  
+  return true;
+};
+
+// Function to store export token with timestamp
+export const setExportToken = (token: string): void => {
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('export_token', token);
+    localStorage.setItem('export_token_timestamp', Date.now().toString());
+  }
+};
 
 export function calculateStats(attendanceData: AttendanceRecord[], usersData: UserRecord[]): DashboardStats {
   const totalPresent = attendanceData.reduce((sum, item) => sum + (item.students_present || 0), 0);
@@ -237,4 +318,32 @@ export function processAttendanceByDistrict(attendanceData: AttendanceRecord[], 
     present: data.present,
     absent: data.absent,
   }));
+}
+
+// Function to fetch school-specific data for school admins
+export async function fetchSchoolData(schoolName: string): Promise<{
+  attendance: AttendanceRecord[];
+  users: UserRecord[];
+}> {
+  try {
+    const [attendanceData, usersData] = await Promise.all([
+      fetchAttendanceData(),
+      fetchUsersData()
+    ]);
+
+    // Filter data to only include the specified school
+    const schoolUsers = usersData.filter(user => user.school === schoolName);
+    const schoolUserPhones = schoolUsers.map(user => user.phone);
+    const schoolAttendance = attendanceData.filter(record => 
+      schoolUserPhones.includes(record.phone)
+    );
+
+    return {
+      attendance: schoolAttendance,
+      users: schoolUsers
+    };
+  } catch (error) {
+    console.error("Error fetching school data:", error);
+    throw new Error("Failed to fetch school data");
+  }
 }
