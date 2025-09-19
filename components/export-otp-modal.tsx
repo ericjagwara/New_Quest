@@ -51,23 +51,28 @@ export function ExportOTPModal({ isOpen, onClose, onVerified, dataType, recordCo
   }
 
   const handleSendOTP = async () => {
-    setIsLoading(true)
-    setError("")
-    setSuccess("")
+    setIsLoading(true);
+    setError("");
+    setSuccess("");
 
     try {
-      const response = await fetch(`${API_BASE_URL}/dashboard/send-export-otp`, {
+      const endpoint = user.role === "manager" 
+        ? `${API_BASE_URL}/dashboard/send-export-otp`
+        : `${API_BASE_URL}/dashboard/send-login-otp`;
+
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Authorization": user.role === "manager" ? `Bearer ${user.access_token}` : undefined,
         },
         body: JSON.stringify({
           phone: user.phone,
-          user_id: user.id,
+          user_id: user.user_id || user.id,
           data_type: dataType,
           record_count: recordCount,
         }),
-      })
+      });
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ detail: "Failed to send OTP" }))
@@ -94,21 +99,33 @@ export function ExportOTPModal({ isOpen, onClose, onVerified, dataType, recordCo
     setError("")
 
     try {
-      const response = await fetch(`${API_BASE_URL}/dashboard/verify-export-otp`, {
+      const endpoint = user.role === "manager" 
+        ? `${API_BASE_URL}/dashboard/verify-export-otp`
+        : `${API_BASE_URL}/dashboard/login`;
+
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Authorization": user.role === "manager" ? `Bearer ${user.access_token}` : undefined,
         },
         body: JSON.stringify({
           phone: user.phone,
           otp: otp.trim(),
-          user_id: user.id,
+          user_id: user.user_id || user.id,
         }),
-      })
+      });
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ detail: "Invalid OTP" }))
         throw new Error(errorData.detail || "Invalid OTP")
+      }
+
+      const result = await response.json();
+      
+      if (user.role === "manager" && result.access_token) {
+        // Store the temporary export token
+        localStorage.setItem('export_token', result.access_token);
       }
 
       setSuccess("OTP verified successfully! Starting download...")

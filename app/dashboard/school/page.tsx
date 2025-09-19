@@ -235,39 +235,56 @@ export default function SchoolDashboardPage() {
     }
   }, [user])
 
-  const fetchSchoolData = async () => {
-    try {
-      setLoading(true)
-      setError(null)
-      const usersData = await fetchUsersData()
-      const currentUserData = usersData.find(u => u.phone === user?.phone)
-      if (!currentUserData) {
-        setError("School information not found")
-        setLoading(false)
-        return
-      }
-      const attendanceResult = await fetchAttendanceData()
-      const schoolAttendance = attendanceResult.filter(record => {
-        const recordUser = usersData.find(u => u.phone === record.phone)
-        return recordUser?.school === currentUserData.school
-      })
-      const enhancedAttendance = schoolAttendance.map((record) => {
-        const user = usersData.find((u) => u.phone === record.phone)
-        return {
-          ...record,
-          teacher_name: user?.name || "Unknown Teacher",
-          school: user?.school || "Unknown School",
-          district: user?.district || "Unknown District",
-        }
-      })
-      setAttendanceData(enhancedAttendance)
-    } catch (err) {
-      console.error("Error fetching school data:", err)
-      setError("Failed to load school data. Please check your connection and try again.")
-    } finally {
+// school/page.tsx - Update fetchSchoolData function
+const fetchSchoolData = async () => {
+  try {
+    setLoading(true)
+    setError(null)
+    
+    // Get the current user's school from their profile
+    const authUser = localStorage.getItem("authUser")
+    if (!authUser) {
+      setError("User not authenticated")
       setLoading(false)
+      return
     }
+    
+    const userData = JSON.parse(authUser)
+    const userSchool = userData.school
+    
+    if (!userSchool) {
+      setError("School information not found for this user")
+      setLoading(false)
+      return
+    }
+    
+    const usersData = await fetchUsersData()
+    const attendanceResult = await fetchAttendanceData()
+    
+    // Filter to only show data for the user's school
+    const schoolAttendance = attendanceResult.filter(record => {
+      const recordUser = usersData.find(u => u.phone === record.phone)
+      return recordUser?.school === userSchool
+    })
+    
+    const enhancedAttendance = schoolAttendance.map((record) => {
+      const user = usersData.find((u) => u.phone === record.phone)
+      return {
+        ...record,
+        teacher_name: user?.name || "Unknown Teacher",
+        school: user?.school || "Unknown School",
+        district: user?.district || "Unknown District",
+      }
+    })
+    
+    setAttendanceData(enhancedAttendance)
+  } catch (err) {
+    console.error("Error fetching school data:", err)
+    setError("Failed to load school data. Please check your connection and try again.")
+  } finally {
+    setLoading(false)
   }
+}
 
   // Show loading state
   if (loading) {
