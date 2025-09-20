@@ -70,7 +70,10 @@ export function DashboardSidebar({ user }: DashboardSidebarProps) {
   const filteredMenuItems = menuItems.filter((item) => item.roles.includes(user.role))
 
   const handleLogout = () => {
-    logout()
+  // Clear export token when logging out
+  localStorage.removeItem('export_token');
+  localStorage.removeItem('export_token_timestamp');
+  logout();
   }
 
   const handleNavigation = (item: any) => {
