@@ -112,7 +112,49 @@ export const hasExportAccess = (): boolean => {
   return true;
 };
 
-// Updated to use public attendance endpoint
+// Fallback data function
+const getFallbackAttendanceData = (): AttendanceRecord[] => {
+  return [
+    {
+      id: "1",
+      phone: "0772207616",
+      subject: "Mathematics",
+      students_present: 25,
+      students_absent: 5,
+      absence_reason: "Sickness and weather conditions",
+      district: "Kisoro",
+    },
+    {
+      id: "2", 
+      phone: "0774405405",
+      subject: "English",
+      students_present: 30,
+      students_absent: 3,
+      absence_reason: "School fees issues",
+      district: "Isingiro",
+    },
+    {
+      id: "3",
+      phone: "0700677231", 
+      subject: "Science",
+      students_present: 22,
+      students_absent: 8,
+      absence_reason: "Rain and flu outbreak",
+      district: "Kaliro",
+    },
+    {
+      id: "4",
+      phone: "0708210793",
+      subject: "Social Studies", 
+      students_present: 28,
+      students_absent: 2,
+      absence_reason: "Family obligations",
+      district: "Ibanda",
+    },
+  ];
+};
+
+// For regular (masked) data - uses public endpoints and returns RAW DATA (no enhancement)
 export async function fetchAttendanceData(): Promise<AttendanceRecord[]> {
   const currentUser = getCurrentUser();
   
@@ -140,7 +182,6 @@ export async function fetchAttendanceData(): Promise<AttendanceRecord[]> {
     
     // If user is a school admin, filter data to only show their school
     if (currentUser && currentUser.role === "schooladmin" && currentUser.school) {
-      // We need to get user data to match schools
       const usersData = await fetchUsersData();
       data = data.filter((record: AttendanceRecord) => {
         const recordUser = usersData.find((u: UserRecord) => u.phone === record.phone);
@@ -148,61 +189,129 @@ export async function fetchAttendanceData(): Promise<AttendanceRecord[]> {
       });
     }
     
+    // Return RAW data - masking will be applied in the component after enhancement
     return data;
   } catch (error) {
     console.warn("API unavailable, using fallback attendance data:", error);
-    // Always return fallback data instead of throwing
-    return [
-      {
-        id: 1,
-        phone: "0772207616",
-        students_present: 30,
-        students_absent: 2,
-        absence_reason: "2 students sick",
-        subject: "Personal Hygiene",
-        district: "Kisoro",
-      },
-      {
-        id: 2,
-        phone: "0772207616",
-        students_present: 18,
-        students_absent: 21,
-        absence_reason: "bad weather, it was raining too much",
-        subject: "Hand Washing Techniques",
-        district: "Kisoro",
-      },
-      {
-        id: 3,
-        phone: "0774405405",
-        students_present: 25,
-        students_absent: 8,
-        absence_reason: "school fees",
-        subject: "Dental Hygiene",
-        district: "Isingiro",
-      },
-      {
-        id: 4,
-        phone: "0700677231",
-        students_present: 40,
-        students_absent: 12,
-        absence_reason: "malaria outbreak",
-        subject: "Food Safety",
-        district: "Kaliro",
-      },
-      {
-        id: 5,
-        phone: "0708210793",
-        students_present: 35,
-        students_absent: 5,
-        absence_reason: "flu symptoms",
-        subject: "Environmental Hygiene",
-        district: "Ibanda",
-      },
-    ];
+    return getFallbackAttendanceData();
   }
 }
 
-// Updated to use public registrations endpoint
+// For unmasked data (after OTP verification) - uses the same public endpoints but returns unmasked data
+export async function fetchUnmaskedAttendanceData(): Promise<AttendanceRecord[]> {
+  const exportToken = getExportToken();
+  const currentUser = getCurrentUser();
+  
+  console.log("Fetching unmasked attendance data...");
+  console.log("Export token exists:", !!exportToken);
+  console.log("Has export access:", hasExportAccess());
+  
+  if (!exportToken || !hasExportAccess()) {
+    throw new Error("No valid export access");
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    // For now, use the same public endpoint since it returns real data
+    console.log("Making request to:", `${API_BASE_URL}/public/attendances`);
+    
+    const response = await fetch(`${API_BASE_URL}/public/attendances`, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        // Note: We're not sending the token since public endpoint doesn't need it
+        // But we've validated the token exists locally
+      },
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      console.warn(`API response not ok: ${response.status} ${response.statusText}`);
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    let data = await response.json();
+    console.log("Successfully fetched UNMASKED attendance data from API:", data.length, "records");
+    console.log("Sample unmasked attendance record:", data[0]);
+    
+    // The public endpoint already returns enhanced data with real names
+    // So we just need to ensure proper structure
+    const processedData = data.map((record: any) => ({
+      id: record.id,
+      phone: record.phone,
+      subject: record.subject,
+      students_present: record.students_present,
+      students_absent: record.students_absent,
+      absence_reason: record.absence_reason,
+      district: record.district,
+      teacher_name: record.teacher_name,
+      school: record.school,
+    }));
+    
+    // If user is a school admin, filter data to only show their school
+    if (currentUser && currentUser.role === "schooladmin" && currentUser.school) {
+      const filteredData = processedData.filter((record: AttendanceRecord) => 
+        record.school === currentUser.school
+      );
+      console.log("Filtered data for school admin:", filteredData.length, "records");
+      return filteredData;
+    }
+    
+    return processedData;
+  } catch (error) {
+    console.error("Failed to fetch unmasked attendance data:", error);
+    throw error;
+  }
+}
+
+// For unmasked user data
+export async function fetchUnmaskedUsersData(): Promise<UserRecord[]> {
+  const exportToken = getExportToken();
+  
+  console.log("Fetching unmasked users data...");
+  console.log("Export token exists:", !!exportToken);
+  
+  if (!exportToken || !hasExportAccess()) {
+    throw new Error("No valid export access");
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    // Use the same public endpoint since it returns real data
+    console.log("Making request to:", `${API_BASE_URL}/public/registrations`);
+
+    const response = await fetch(`${API_BASE_URL}/public/registrations`, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      console.warn(`API response not ok: ${response.status} ${response.statusText}`);
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    console.log("Successfully fetched UNMASKED users data from API:", data.length, "records");
+    console.log("Sample unmasked user record:", data[0]);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch unmasked users data:", error);
+    throw error;
+  }
+}
+
+// Updated to use public registrations endpoint and returns RAW DATA (no masking)
 export async function fetchUsersData(): Promise<UserRecord[]> {
   const currentUser = getCurrentUser();
   
@@ -233,42 +342,43 @@ export async function fetchUsersData(): Promise<UserRecord[]> {
       data = data.filter((user: UserRecord) => user.school === currentUser.school);
     }
     
+    // Return RAW data - masking will be applied in the component if needed
     return data;
   } catch (error) {
     console.warn("API unavailable, using fallback users data:", error);
     // Always return fallback data instead of throwing
     return [
       {
-        id: 1,
+        id: "1",
         phone: "0772207616",
         name: "Katende Brian",
         school: "St. Mary's Primary",
         district: "Kisoro",
-        language: "English",
+        role: "teacher",
       },
       {
-        id: 2,
+        id: "2",
         phone: "0774405405",
         name: "John Doe",
         school: "Kampala Primary",
         district: "Isingiro",
-        language: "English",
+        role: "teacher",
       },
       {
-        id: 3,
+        id: "3",
         phone: "0700677231",
         name: "Charity Atuheire",
         school: "Mary Secondary School",
         district: "Kaliro",
-        language: "English",
+        role: "teacher",
       },
       {
-        id: 4,
+        id: "4",
         phone: "0708210793",
         name: "Sarah Nakato",
         school: "Luweero Primary",
         district: "Ibanda",
-        language: "English",
+        role: "teacher",
       },
     ];
   }

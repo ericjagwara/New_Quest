@@ -12,10 +12,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Search, Filter, Download, RefreshCw, GitPullRequest as FileRequest } from "lucide-react"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts"
-import { fetchAttendanceData, fetchUsersData, processAbsenceReasons } from "@/lib/api"
+import { fetchAttendanceData, fetchUsersData, processAbsenceReasons, fetchUnmaskedAttendanceData, fetchUnmaskedUsersData } from "@/lib/api"
 import { exportToCSV, formatAttendanceDataForExport } from "@/lib/csv-export"
 import { ExportRequestModal } from "@/components/export-request-modal"
-import { ExportOTPModal } from "@/components/export-otp-modal" // Added missing import
+import { ExportOTPModal } from "@/components/export-otp-modal"
 
 interface AttendanceRecord {
   id: string
@@ -107,6 +107,19 @@ export default function AttendanceAnalysisPage() {
     filterData()
   }, [attendanceData, searchTerm, selectedDistrict, selectedSchool])
 
+  // Helper function to apply masking for managers
+  const applyMasking = (data: EnhancedAttendanceRecord[]): EnhancedAttendanceRecord[] => {
+    if (user?.role === "manager") {
+      return data.map((record, index) => ({
+        ...record,
+        teacher_name: `Teacher-${(index + 1).toString().padStart(4, '0')}`,
+        school: `SCH-${(index + 1).toString().padStart(4, '0')}`,
+        district: `District-${(index % 10) + 1}`,
+      }))
+    }
+    return data
+  }
+
   const fetchData = async () => {
     try {
       setLoading(true)
@@ -114,17 +127,21 @@ export default function AttendanceAnalysisPage() {
 
       const [attendanceResult, usersResult] = await Promise.all([fetchAttendanceData(), fetchUsersData()])
 
+      // Enhanced attendance data with user information
       const enhancedAttendance = attendanceResult.map((record) => {
-        const user = usersResult.find((u) => u.phone === record.phone)
+        const userRecord = usersResult.find((u) => u.phone === record.phone)
         return {
           ...record,
-          teacher_name: user?.name || "Unknown Teacher",
-          school: user?.school || "Unknown School",
-          district: user?.district || "Unknown District",
+          teacher_name: userRecord?.name || "Unknown Teacher",
+          school: userRecord?.school || "Unknown School",
+          district: userRecord?.district || "Unknown District",
         }
       })
 
-      setAttendanceData(enhancedAttendance)
+      // Apply masking for managers after enhancement
+      const maskedData = applyMasking(enhancedAttendance)
+
+      setAttendanceData(maskedData)
       setUsersData(usersResult)
     } catch (err) {
       console.error("Error fetching data:", err)
@@ -182,37 +199,91 @@ export default function AttendanceAnalysisPage() {
     return "default"
   }
 
+  const handleOTPVerified = async () => {
+    // After OTP verification, the export token should be stored in localStorage
+    // Now fetch and export the unmasked data
+    await fetchAndExportUnmaskedData();
+  };
+
   // New function to fetch and export unmasked data
   const fetchAndExportUnmaskedData = async () => {
     try {
       setLoading(true);
       
-      // Use the export token to fetch unmasked data
-      const exportToken = localStorage.getItem('export_token');
+      console.log("Starting to fetch unmasked data for export...");
       
-      const response = await fetch(`${API_BASE_URL}/attendances`, {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${exportToken}`
-        },
+      // Use the new unmasked data function (which uses public endpoints but requires OTP token validation)
+      const unmaskedAttendance = await fetchUnmaskedAttendanceData();
+
+      console.log("Fetched unmasked attendance records:", unmaskedAttendance.length);
+      console.log("Sample unmasked attendance record:", unmaskedAttendance[0]);
+
+      // The data from public endpoint is already enhanced, so we can use it directly
+      const exportData = unmaskedAttendance;
+
+      console.log("Sample records for export:");
+      exportData.slice(0, 3).forEach((record, index) => {
+        console.log(`Record ${index}:`, {
+          teacher_name: record.teacher_name,
+          school: record.school,
+          district: record.district,
+          phone: record.phone
+        });
       });
 
-      if (!response.ok) {
-        throw new Error("Failed to fetch unmasked data");
+      // Apply current UI filters to the export data
+      let filteredExportData = exportData;
+
+      if (searchTerm) {
+        console.log("Applying search filter:", searchTerm);
+        const beforeCount = filteredExportData.length;
+        filteredExportData = filteredExportData.filter(
+          (record) =>
+            record.teacher_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            record.school?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            record.subject?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            record.absence_reason?.toLowerCase().includes(searchTerm.toLowerCase()),
+        );
+        console.log(`Search filter: ${beforeCount} -> ${filteredExportData.length}`);
       }
 
-      const unmaskedData = await response.json();
-      
-      // Export the unmasked data
-      const exportData = formatAttendanceDataForExport(unmaskedData);
+      // For district and school filters, we need to compare against real values, not masked ones
+      // So we'll skip these filters for manager exports to avoid confusion
+      if (user?.role !== "manager") {
+        if (selectedDistrict !== "all") {
+          console.log("Applying district filter:", selectedDistrict);
+          const beforeCount = filteredExportData.length;
+          filteredExportData = filteredExportData.filter((record) => record.district === selectedDistrict);
+          console.log(`District filter: ${beforeCount} -> ${filteredExportData.length}`);
+        }
+
+        if (selectedSchool !== "all") {
+          console.log("Applying school filter:", selectedSchool);
+          const beforeCount = filteredExportData.length;
+          filteredExportData = filteredExportData.filter((record) => record.school === selectedSchool);
+          console.log(`School filter: ${beforeCount} -> ${filteredExportData.length}`);
+        }
+      }
+
+      console.log("Final filtered data for export:", filteredExportData.length);
+
+      if (filteredExportData.length === 0) {
+        alert("No data matches the current filters for export");
+        return;
+      }
+
+      // Format and export the data
+      const formattedExportData = formatAttendanceDataForExport(filteredExportData);
       const timestamp = new Date().toISOString().split("T")[0];
       const filename = `attendance-data-unmasked-${timestamp}`;
-      exportToCSV(exportData, filename);
+      exportToCSV(formattedExportData, filename);
+      
+      console.log("Export completed successfully");
+      alert(`Successfully exported ${filteredExportData.length} unmasked records!`);
       
     } catch (err) {
       console.error("Error exporting unmasked data:", err);
-      alert("Failed to export data. Please try again.");
+      alert("Failed to export unmasked data. Please try again.");
       // Clear invalid token and show OTP modal again
       localStorage.removeItem('export_token');
       localStorage.removeItem('export_token_timestamp');
@@ -220,12 +291,6 @@ export default function AttendanceAnalysisPage() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleOTPVerified = async () => {
-    // After OTP verification, the export token should be stored in localStorage
-    // Now fetch and export the unmasked data
-    await fetchAndExportUnmaskedData();
   };
 
   const handleExportData = async () => {
@@ -241,21 +306,30 @@ export default function AttendanceAnalysisPage() {
         const exportToken = localStorage.getItem('export_token');
         const tokenTimestamp = localStorage.getItem('export_token_timestamp');
         
+        console.log("Manager export - checking token:", {
+          hasToken: !!exportToken,
+          hasTimestamp: !!tokenTimestamp,
+          tokenValue: exportToken?.substring(0, 20) + "..." // Log partial token for debugging
+        });
+        
         if (exportToken && tokenTimestamp) {
           const tokenTime = parseInt(tokenTimestamp, 10);
           const currentTime = Date.now();
           // Check if token is still valid (30 minutes)
           if (currentTime - tokenTime <= 30 * 60 * 1000) {
+            console.log("Valid token found, proceeding with unmasked export");
             // Token is valid, fetch unmasked data
             await fetchAndExportUnmaskedData();
             return;
           } else {
+            console.log("Token expired, clearing and requesting new OTP");
             // Token expired, clear it
             localStorage.removeItem('export_token');
             localStorage.removeItem('export_token_timestamp');
           }
         }
         
+        console.log("No valid token, showing OTP modal");
         // No valid token, show OTP modal
         setShowExportOTPModal(true);
         
@@ -266,8 +340,9 @@ export default function AttendanceAnalysisPage() {
       return;
     }
 
-    // Superadmins can export directly without OTP
+    // Superadmins can export directly without OTP (they see unmasked data anyway)
     if (user?.role === "superadmin") {
+      console.log("Superadmin export - direct export");
       const exportData = formatAttendanceDataForExport(filteredData);
       const timestamp = new Date().toISOString().split("T")[0];
       const filename = `attendance-data-${timestamp}`;
@@ -277,6 +352,7 @@ export default function AttendanceAnalysisPage() {
 
     // Fieldworkers need to request permission
     if (user?.role === "fieldworker") {
+      console.log("Fieldworker export - showing request modal");
       setShowExportRequestModal(true);
       return;
     }
@@ -465,6 +541,11 @@ export default function AttendanceAnalysisPage() {
                 <CardTitle className="text-emerald-800">Detailed Attendance Records</CardTitle>
                 <p className="text-sm text-emerald-600">
                   Showing {filteredData.length} of {attendanceData.length} records
+                  {user?.role === "manager" && (
+                    <span className="ml-2 text-xs text-amber-600 font-medium">
+                      📊 Data is masked for privacy - use Export for full details
+                    </span>
+                  )}
                 </p>
               </CardHeader>
               <CardContent>
