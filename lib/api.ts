@@ -16,6 +16,46 @@ const getAuthToken = (): string | null => {
   }
 };
 
+export interface LessonPlan {
+  id: string;
+  phone: string;
+  score: number;
+  subject: string;
+  feedback: string;
+  spaces_file_path: string;
+  original_filename: string;
+  public_url: string;
+  created_at: string;
+  teacher_name?: string;
+  school?: string;
+  district?: string;
+}
+
+// Updated function to use public lesson plans endpoint
+export const fetchLessonPlans = async (): Promise<LessonPlan[]> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/public/lessonplans`, {
+      method: 'GET',
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      console.warn(`API response not ok: ${response.status} ${response.statusText}`);
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    console.log("Successfully fetched lesson plans from API");
+    return data;
+  } catch (error) {
+    console.error("Error fetching lesson plans:", error);
+    // Return empty array instead of throwing to prevent UI breakage
+    return [];
+  }
+};
+
 // Helper function to get export token for managers
 const getExportToken = (): string | null => {
   if (typeof window === 'undefined') return null;
@@ -35,30 +75,56 @@ const getCurrentUser = (): any => {
   }
 };
 
-// Fetch attendance data with authentication and role-based filtering
+// Function to store export token with timestamp
+export const setExportToken = (token: string): void => {
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('export_token', token);
+    localStorage.setItem('export_token_timestamp', Date.now().toString());
+  }
+};
+
+// Function to clear export token
+export const clearExportToken = (): void => {
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem('export_token');
+    localStorage.removeItem('export_token_timestamp');
+  }
+};
+
+// Function to check if user has export access
+export const hasExportAccess = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  
+  const exportToken = localStorage.getItem('export_token');
+  if (!exportToken) return false;
+  
+  const tokenTimestamp = localStorage.getItem('export_token_timestamp');
+  if (tokenTimestamp) {
+    const tokenTime = parseInt(tokenTimestamp, 10);
+    const currentTime = Date.now();
+    // Check if token is older than 30 minutes
+    if (currentTime - tokenTime > 30 * 60 * 1000) {
+      clearExportToken();
+      return false;
+    }
+  }
+  
+  return true;
+};
+
+// Updated to use public attendance endpoint
 export async function fetchAttendanceData(): Promise<AttendanceRecord[]> {
-  const token = getAuthToken();
-  const exportToken = getExportToken();
   const currentUser = getCurrentUser();
   
   try {
-    const headers: HeadersInit = {
-      "Content-Type": "application/json",
-    };
-    
-    // Use export token for managers if available, otherwise use regular token
-    if (exportToken) {
-      headers["Authorization"] = `Bearer ${exportToken}`;
-    } else if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-    }
-
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-    const response = await fetch(`${API_BASE_URL}/attendances`, {
+    const response = await fetch(`${API_BASE_URL}/public/attendances`, {
       method: "GET",
-      headers,
+      headers: {
+        "Content-Type": "application/json",
+      },
       signal: controller.signal,
     });
 
@@ -136,30 +202,19 @@ export async function fetchAttendanceData(): Promise<AttendanceRecord[]> {
   }
 }
 
-// Fetch user/registration data with authentication and role-based filtering
+// Updated to use public registrations endpoint
 export async function fetchUsersData(): Promise<UserRecord[]> {
-  const token = getAuthToken();
-  const exportToken = getExportToken();
   const currentUser = getCurrentUser();
   
   try {
-    const headers: HeadersInit = {
-      "Content-Type": "application/json",
-    };
-    
-    // Use export token for managers if available, otherwise use regular token
-    if (exportToken) {
-      headers["Authorization"] = `Bearer ${exportToken}`;
-    } else if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-    }
-
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-    const response = await fetch(`${API_BASE_URL}/registrations`, {
+    const response = await fetch(`${API_BASE_URL}/public/registrations`, {
       method: "GET",
-      headers,
+      headers: {
+        "Content-Type": "application/json",
+      },
       signal: controller.signal,
     });
 
@@ -218,43 +273,6 @@ export async function fetchUsersData(): Promise<UserRecord[]> {
     ];
   }
 }
-
-// Function to clear export token (call this when manager logs out or session expires)
-export const clearExportToken = (): void => {
-  if (typeof window !== 'undefined') {
-    localStorage.removeItem('export_token');
-  }
-};
-
-// Function to check if user has export access (for managers)
-export const hasExportAccess = (): boolean => {
-  if (typeof window === 'undefined') return false;
-  
-  const exportToken = localStorage.getItem('export_token');
-  if (!exportToken) return false;
-  
-  // Check if token is expired (simple check - in real app, decode JWT)
-  const tokenTimestamp = localStorage.getItem('export_token_timestamp');
-  if (tokenTimestamp) {
-    const tokenTime = parseInt(tokenTimestamp, 10);
-    const currentTime = Date.now();
-    // Check if token is older than 30 minutes
-    if (currentTime - tokenTime > 30 * 60 * 1000) {
-      clearExportToken();
-      return false;
-    }
-  }
-  
-  return true;
-};
-
-// Function to store export token with timestamp
-export const setExportToken = (token: string): void => {
-  if (typeof window !== 'undefined') {
-    localStorage.setItem('export_token', token);
-    localStorage.setItem('export_token_timestamp', Date.now().toString());
-  }
-};
 
 export function calculateStats(attendanceData: AttendanceRecord[], usersData: UserRecord[]): DashboardStats {
   const totalPresent = attendanceData.reduce((sum, item) => sum + (item.students_present || 0), 0);

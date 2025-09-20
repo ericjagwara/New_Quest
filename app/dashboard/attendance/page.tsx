@@ -15,6 +15,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { fetchAttendanceData, fetchUsersData, processAbsenceReasons } from "@/lib/api"
 import { exportToCSV, formatAttendanceDataForExport } from "@/lib/csv-export"
 import { ExportRequestModal } from "@/components/export-request-modal"
+import { ExportOTPModal } from "@/components/export-otp-modal" // Added missing import
 
 interface AttendanceRecord {
   id: string
@@ -46,14 +47,13 @@ interface User {
   district?: string
 }
 
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://hygienequestemdpoints.onrender.com";
-
 interface EnhancedAttendanceRecord extends AttendanceRecord {
   teacher_name?: string
   school?: string
   district?: string
 }
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://hygienequestemdpoints.onrender.com";
 
 export default function AttendanceAnalysisPage() {
   const [user, setUser] = useState<User | null>(null)
@@ -66,6 +66,7 @@ export default function AttendanceAnalysisPage() {
   const [selectedDistrict, setSelectedDistrict] = useState("all")
   const [selectedSchool, setSelectedSchool] = useState("all")
   const [showExportRequestModal, setShowExportRequestModal] = useState(false)
+  const [showExportOTPModal, setShowExportOTPModal] = useState(false)
   const router = useRouter()
 
   useEffect(() => {
@@ -181,66 +182,106 @@ export default function AttendanceAnalysisPage() {
     return "default"
   }
 
-  // Update the handleExportData function in attendance/page.tsx
+  // New function to fetch and export unmasked data
+  const fetchAndExportUnmaskedData = async () => {
+    try {
+      setLoading(true);
+      
+      // Use the export token to fetch unmasked data
+      const exportToken = localStorage.getItem('export_token');
+      
+      const response = await fetch(`${API_BASE_URL}/attendances`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${exportToken}`
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to fetch unmasked data");
+      }
+
+      const unmaskedData = await response.json();
+      
+      // Export the unmasked data
+      const exportData = formatAttendanceDataForExport(unmaskedData);
+      const timestamp = new Date().toISOString().split("T")[0];
+      const filename = `attendance-data-unmasked-${timestamp}`;
+      exportToCSV(exportData, filename);
+      
+    } catch (err) {
+      console.error("Error exporting unmasked data:", err);
+      alert("Failed to export data. Please try again.");
+      // Clear invalid token and show OTP modal again
+      localStorage.removeItem('export_token');
+      localStorage.removeItem('export_token_timestamp');
+      setShowExportOTPModal(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOTPVerified = async () => {
+    // After OTP verification, the export token should be stored in localStorage
+    // Now fetch and export the unmasked data
+    await fetchAndExportUnmaskedData();
+  };
+
   const handleExportData = async () => {
     if (filteredData.length === 0) {
       alert("No data to export");
       return;
     }
-  
-    // Check if user has permission to export
-    if (user?.role === "fieldworker") {
+
+    // Check if user is manager - they need OTP verification for unmasked data
+    if (user?.role === "manager") {
       try {
-        // Make sure user.user_id is defined
-        if (!user.user_id) {
-          console.error("User ID is undefined:", user);
-          setShowExportRequestModal(true);
-          return;
-        }
-  
-        const response = await fetch(`${API_BASE_URL}/dashboard/export-requests/user/${user.user_id}`, {
-          headers: {
-            "Authorization": `Bearer ${user.access_token}`,
-            "Content-Type": "application/json"
-          }
-        });
+        // First check if they already have a valid export token
+        const exportToken = localStorage.getItem('export_token');
+        const tokenTimestamp = localStorage.getItem('export_token_timestamp');
         
-        if (response.ok) {
-          const approvedRequests = await response.json();
-          const canExport = approvedRequests.some((req: any) => 
-            req.data_type === "Attendance Analysis" && req.status === "approved"
-          );
-          
-          if (canExport) {
-            // User can export - proceed with download
-            const exportData = formatAttendanceDataForExport(filteredData);
-            const timestamp = new Date().toISOString().split("T")[0];
-            const filename = `attendance-data-${timestamp}`;
-            exportToCSV(exportData, filename);
+        if (exportToken && tokenTimestamp) {
+          const tokenTime = parseInt(tokenTimestamp, 10);
+          const currentTime = Date.now();
+          // Check if token is still valid (30 minutes)
+          if (currentTime - tokenTime <= 30 * 60 * 1000) {
+            // Token is valid, fetch unmasked data
+            await fetchAndExportUnmaskedData();
+            return;
           } else {
-            // User needs to request permission
-            setShowExportRequestModal(true);
+            // Token expired, clear it
+            localStorage.removeItem('export_token');
+            localStorage.removeItem('export_token_timestamp');
           }
-        } else {
-          console.error("Failed to check export permissions:", response.status);
-          setShowExportRequestModal(true);
         }
+        
+        // No valid token, show OTP modal
+        setShowExportOTPModal(true);
+        
       } catch (error) {
-        console.error("Error checking export permissions:", error);
-        setShowExportRequestModal(true);
+        console.error("Error checking export token:", error);
+        setShowExportOTPModal(true);
       }
       return;
     }
-  
-    // Superadmins and managers can export directly
-    if (user?.role === "superadmin" || user?.role === "manager") {
+
+    // Superadmins can export directly without OTP
+    if (user?.role === "superadmin") {
       const exportData = formatAttendanceDataForExport(filteredData);
       const timestamp = new Date().toISOString().split("T")[0];
       const filename = `attendance-data-${timestamp}`;
       exportToCSV(exportData, filename);
       return;
     }
+
+    // Fieldworkers need to request permission
+    if (user?.role === "fieldworker") {
+      setShowExportRequestModal(true);
+      return;
+    }
   };
+
   if (!user) {
     return <div className="flex items-center justify-center h-screen">Loading...</div>
   }
@@ -335,22 +376,28 @@ export default function AttendanceAnalysisPage() {
                   </Select>
 
                   <Button
-                    variant="outline"
-                    className="border-emerald-200 text-emerald-700 hover:bg-emerald-50 bg-transparent"
-                    onClick={handleExportData}
-                  >
-                    {user?.role === "fieldworker" ? (
-                      <>
-                        <FileRequest className="w-4 h-4 mr-2" />
-                        Request Export
-                      </>
-                    ) : (
-                      <>
-                        <Download className="w-4 h-4 mr-2" />
-                        Export Data
-                      </>
-                    )}
-                  </Button>
+                     variant="outline"
+                     className="border-emerald-200 text-emerald-700 hover:bg-emerald-50 bg-transparent"
+                     onClick={handleExportData}
+                     disabled={loading}
+                 >
+  {user?.role === "fieldworker" ? (
+    <>
+      <FileRequest className="w-4 h-4 mr-2" />
+      Request Export
+    </>
+  ) : user?.role === "manager" ? (
+    <>
+      <Download className="w-4 h-4 mr-2" />
+      Export Data (OTP Required)
+    </>
+  ) : (
+    <>
+      <Download className="w-4 h-4 mr-2" />
+      Export Data
+    </>
+  )}
+</Button>
                 </div>
               </CardContent>
             </Card>
@@ -475,6 +522,16 @@ export default function AttendanceAnalysisPage() {
         </main>
       </div>
 
+      {/* Export Modals */}
+      <ExportOTPModal
+        isOpen={showExportOTPModal}
+        onClose={() => setShowExportOTPModal(false)}
+        onVerified={handleOTPVerified}
+        dataType="Attendance Analysis"
+        recordCount={filteredData.length}
+        user={user}
+      />
+
       <ExportRequestModal
         isOpen={showExportRequestModal}
         onClose={() => setShowExportRequestModal(false)}
@@ -483,5 +540,5 @@ export default function AttendanceAnalysisPage() {
         user={user}
       />
     </div>
-  ) 
+  )
 }
