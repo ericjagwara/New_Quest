@@ -10,7 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { RefreshCw } from "lucide-react"
-import { fetchAttendanceData, fetchUsersData } from "@/lib/api"
+import { fetchAttendanceData, fetchUsersData, fetchLessonPlans } from "@/lib/api"
 
 interface AttendanceRecord {
   id: string
@@ -33,12 +33,26 @@ interface User {
   district?: string
 }
 
+interface LessonPlan {
+  id: string
+  score: number
+  subject: string
+  feedback: string
+  public_url: string
+  original_filename: string
+  teacher_name: string
+  created_at: string
+}
+
 export default function SchoolDashboardPage() {
   const [user, setUser] = useState<User | null>(null)
   const [attendanceData, setAttendanceData] = useState<AttendanceRecord[]>([])
+  const [lessonPlans, setLessonPlans] = useState<LessonPlan[]>([])
   const [loading, setLoading] = useState(true)
+  const [lessonPlansLoading, setLessonPlansLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isBlurred, setIsBlurred] = useState(false)
+  const [activeTab, setActiveTab] = useState<'attendance' | 'lessonplans'>('attendance')
   const router = useRouter()
 
   // Screenshot prevention effects
@@ -232,62 +246,103 @@ export default function SchoolDashboardPage() {
   useEffect(() => {
     if (user) {
       fetchSchoolData()
+      fetchSchoolLessonPlansData()
     }
   }, [user])
 
-// school/page.tsx - Update fetchSchoolData function
-const fetchSchoolData = async () => {
-  try {
-    setLoading(true)
-    setError(null)
-    
-    // Get the current user's school from their profile
-    const authUser = localStorage.getItem("authUser")
-    if (!authUser) {
-      setError("User not authenticated")
-      setLoading(false)
-      return
-    }
-    
-    const userData = JSON.parse(authUser)
-    const userSchool = userData.school
-    
-    if (!userSchool) {
-      setError("School information not found for this user")
-      setLoading(false)
-      return
-    }
-    
-    const usersData = await fetchUsersData()
-    const attendanceResult = await fetchAttendanceData()
-    
-    // Filter to only show data for the user's school
-    const schoolAttendance = attendanceResult.filter(record => {
-      const recordUser = usersData.find(u => u.phone === record.phone)
-      return recordUser?.school === userSchool
-    })
-    
-    const enhancedAttendance = schoolAttendance.map((record) => {
-      const user = usersData.find((u) => u.phone === record.phone)
-      return {
-        ...record,
-        teacher_name: user?.name || "Unknown Teacher",
-        school: user?.school || "Unknown School",
-        district: user?.district || "Unknown District",
+  // Fetch school attendance data
+  const fetchSchoolData = async () => {
+    try {
+      setLoading(true)
+      setError(null)
+      
+      // Get the current user's school from their profile
+      const authUser = localStorage.getItem("authUser")
+      if (!authUser) {
+        setError("User not authenticated")
+        setLoading(false)
+        return
       }
-    })
-    
-    setAttendanceData(enhancedAttendance)
-  } catch (err) {
-    console.error("Error fetching school data:", err)
-    setError("Failed to load school data. Please check your connection and try again.")
-  } finally {
-    setLoading(false)
+      
+      const userData = JSON.parse(authUser)
+      const userSchool = userData.school
+      
+      if (!userSchool) {
+        setError("School information not found for this user")
+        setLoading(false)
+        return
+      }
+      
+      const usersData = await fetchUsersData()
+      const attendanceResult = await fetchAttendanceData()
+      
+      // Filter to only show data for the user's school
+      const schoolAttendance = attendanceResult.filter(record => {
+        const recordUser = usersData.find(u => u.phone === record.phone)
+        return recordUser?.school === userSchool
+      })
+      
+      const enhancedAttendance = schoolAttendance.map((record) => {
+        const user = usersData.find((u) => u.phone === record.phone)
+        return {
+          ...record,
+          teacher_name: user?.name || "Unknown Teacher",
+          school: user?.school || "Unknown School",
+          district: user?.district || "Unknown District",
+        }
+      })
+      
+      setAttendanceData(enhancedAttendance)
+    } catch (err) {
+      console.error("Error fetching school data:", err)
+      setError("Failed to load school data. Please check your connection and try again.")
+    } finally {
+      setLoading(false)
+    }
   }
-}
+
+  // Fetch school lesson plans data
+  const fetchSchoolLessonPlansData = async () => {
+    try {
+      setLessonPlansLoading(true)
+      setError(null)
+      
+      // Get the current user's school from their profile
+      const authUser = localStorage.getItem("authUser")
+      if (!authUser) {
+        setError("User not authenticated")
+        return
+      }
+      
+      const userData = JSON.parse(authUser)
+      const userSchool = userData.school
+      
+      if (!userSchool) {
+        setError("School information not found for this user")
+        return
+      }
+      
+      // Fetch all lesson plans and users data
+      const allPlans = await fetchLessonPlans()
+      const usersData = await fetchUsersData()
+      
+      // Filter lesson plans for the current school
+      const schoolPlans = allPlans.filter(plan => {
+        const teacher = usersData.find(user => user.name === plan.teacher_name)
+        return teacher?.school === userSchool
+      })
+      
+      setLessonPlans(schoolPlans)
+    } catch (err) {
+      console.error("Error fetching lesson plans:", err)
+      setError("Failed to load lesson plans")
+    } finally {
+      setLessonPlansLoading(false)
+    }
+  }
 
   // Show loading state
-  if (loading) {
+  if (loading && activeTab === 'attendance') {
     return <div className="flex items-center justify-center h-screen">Loading school data...</div>
   }
 
@@ -328,11 +383,14 @@ const fetchSchoolData = async () => {
             <div className="flex items-center justify-between">
               <h1 className="text-3xl font-bold text-emerald-800">School Dashboard</h1>
               <Button 
-                onClick={fetchSchoolData} 
-                disabled={loading}
+                onClick={() => {
+                  if (activeTab === 'attendance') fetchSchoolData()
+                  else fetchSchoolLessonPlansData()
+                }} 
+                disabled={loading || lessonPlansLoading}
                 className="bg-emerald-600 hover:bg-emerald-700 text-white"
               >
-                <RefreshCw className={`w-4 h-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+                <RefreshCw className={`w-4 h-4 mr-2 ${loading || lessonPlansLoading ? "animate-spin" : ""}`} />
                 Refresh Data
               </Button>
             </div>
@@ -341,7 +399,10 @@ const fetchSchoolData = async () => {
               <div className="bg-red-50 border border-red-200 rounded-lg p-4">
                 <p className="text-red-800 text-sm mb-3">{error}</p>
                 <Button 
-                  onClick={fetchSchoolData} 
+                  onClick={() => {
+                    if (activeTab === 'attendance') fetchSchoolData()
+                    else fetchSchoolLessonPlansData()
+                  }} 
                   size="sm" 
                   variant="outline"
                   className="text-red-700 border-red-300 hover:bg-red-100 bg-transparent"
@@ -352,12 +413,43 @@ const fetchSchoolData = async () => {
               </div>
             )}
 
+            {/* Tabs */}
+            <div className="border-b border-emerald-200">
+              <div className="flex space-x-1">
+                <button
+                  onClick={() => setActiveTab('attendance')}
+                  className={`px-4 py-2 text-sm font-medium rounded-t-lg ${
+                    activeTab === 'attendance'
+                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-200 border-b-0'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  Attendance Records
+                </button>
+                <button
+                  onClick={() => setActiveTab('lessonplans')}
+                  className={`px-4 py-2 text-sm font-medium rounded-t-lg ${
+                    activeTab === 'lessonplans'
+                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-200 border-b-0'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  Lesson Plans
+                </button>
+              </div>
+            </div>
+
+            {/* Stats Cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Card className="bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-lg">
                 <CardContent className="p-6">
                   <div className="text-center">
-                    <p className="text-emerald-100 text-sm">Total Attendance Records</p>
-                    <p className="text-3xl font-bold">{attendanceData.length}</p>
+                    <p className="text-emerald-100 text-sm">
+                      {activeTab === 'attendance' ? 'Total Attendance Records' : 'Total Lesson Plans'}
+                    </p>
+                    <p className="text-3xl font-bold">
+                      {activeTab === 'attendance' ? attendanceData.length : lessonPlans.length}
+                    </p>
                   </div>
                 </CardContent>
               </Card>
@@ -365,8 +457,16 @@ const fetchSchoolData = async () => {
               <Card className="bg-gradient-to-r from-blue-500 to-cyan-600 text-white shadow-lg">
                 <CardContent className="p-6">
                   <div className="text-center">
-                    <p className="text-blue-100 text-sm">Attendance Rate</p>
-                    <p className="text-3xl font-bold">{attendanceRate}%</p>
+                    <p className="text-blue-100 text-sm">
+                      {activeTab === 'attendance' ? 'Attendance Rate' : 'Average Score'}
+                    </p>
+                    <p className="text-3xl font-bold">
+                      {activeTab === 'attendance' ? `${attendanceRate}%` : 
+                        lessonPlans.length > 0 ? 
+                          `${Math.round(lessonPlans.reduce((sum, plan) => sum + plan.score, 0) / lessonPlans.length)}/100` : 
+                          '0/100'
+                      }
+                    </p>
                   </div>
                 </CardContent>
               </Card>
@@ -374,61 +474,125 @@ const fetchSchoolData = async () => {
               <Card className="bg-gradient-to-r from-purple-500 to-pink-600 text-white shadow-lg">
                 <CardContent className="p-6">
                   <div className="text-center">
-                    <p className="text-purple-100 text-sm">Total Students</p>
-                    <p className="text-3xl font-bold">{totalStudents}</p>
+                    <p className="text-purple-100 text-sm">
+                      {activeTab === 'attendance' ? 'Total Students' : 'Teachers Submitted'}
+                    </p>
+                    <p className="text-3xl font-bold">
+                      {activeTab === 'attendance' ? totalStudents : 
+                        new Set(lessonPlans.map(plan => plan.teacher_name)).size
+                      }
+                    </p>
                   </div>
                 </CardContent>
               </Card>
             </div>
 
-            <Card className="bg-white/80 backdrop-blur-sm shadow-lg border-emerald-100">
-              <CardHeader>
-                <CardTitle className="text-emerald-800">School Attendance Records</CardTitle>
-                <p className="text-sm text-emerald-600">
-                  Showing {attendanceData.length} records for your school
-                </p>
-              </CardHeader>
-              <CardContent>
-                {attendanceData.length > 0 ? (
-                  <div className="rounded-lg border border-emerald-200 overflow-hidden">
-                    <Table>
-                      <TableHeader className="bg-emerald-50">
-                        <TableRow>
-                          <TableHead className="text-emerald-800 font-semibold">Teacher</TableHead>
-                          <TableHead className="text-emerald-800 font-semibold">Subject</TableHead>
-                          <TableHead className="text-emerald-800 font-semibold text-center">Present</TableHead>
-                          <TableHead className="text-emerald-800 font-semibold text-center">Absent</TableHead>
-                          <TableHead className="text-emerald-800 font-semibold">Absence Reason</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {attendanceData.map((record) => (
-                          <TableRow key={record.id} className="hover:bg-emerald-50/50">
-                            <TableCell className="font-medium text-gray-900">{record.teacher_name}</TableCell>
-                            <TableCell className="text-gray-700 max-w-xs truncate">{record.subject}</TableCell>
-                            <TableCell className="text-center">
-                              <Badge variant="secondary" className="bg-emerald-100 text-emerald-800">
-                                {record.students_present}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="text-center">
-                              <Badge variant="secondary" className="bg-red-100 text-red-800">
-                                {record.students_absent}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="text-gray-700 text-sm">{record.absence_reason}</TableCell>
+            {/* Attendance Tab */}
+            {activeTab === 'attendance' && (
+              <Card className="bg-white/80 backdrop-blur-sm shadow-lg border-emerald-100">
+                <CardHeader>
+                  <CardTitle className="text-emerald-800">School Attendance Records</CardTitle>
+                  <p className="text-sm text-emerald-600">
+                    Showing {attendanceData.length} records for your school
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  {attendanceData.length > 0 ? (
+                    <div className="rounded-lg border border-emerald-200 overflow-hidden">
+                      <Table>
+                        <TableHeader className="bg-emerald-50">
+                          <TableRow>
+                            <TableHead className="text-emerald-800 font-semibold">Teacher</TableHead>
+                            <TableHead className="text-emerald-800 font-semibold">Subject</TableHead>
+                            <TableHead className="text-emerald-800 font-semibold text-center">Present</TableHead>
+                            <TableHead className="text-emerald-800 font-semibold text-center">Absent</TableHead>
+                            <TableHead className="text-emerald-800 font-semibold">Absence Reason</TableHead>
                           </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                ) : (
-                  <div className="text-center py-8 text-gray-500">
-                    {loading ? "Loading attendance data..." : "No attendance records found for your school"}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+                        </TableHeader>
+                        <TableBody>
+                          {attendanceData.map((record) => (
+                            <TableRow key={record.id} className="hover:bg-emerald-50/50">
+                              <TableCell className="font-medium text-gray-900">{record.teacher_name}</TableCell>
+                              <TableCell className="text-gray-700 max-w-xs truncate">{record.subject}</TableCell>
+                              <TableCell className="text-center">
+                                <Badge variant="secondary" className="bg-emerald-100 text-emerald-800">
+                                  {record.students_present}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="text-center">
+                                <Badge variant="secondary" className="bg-red-100 text-red-800">
+                                  {record.students_absent}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="text-gray-700 text-sm">{record.absence_reason}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  ) : (
+                    <div className="text-center py-8 text-gray-500">
+                      {loading ? "Loading attendance data..." : "No attendance records found for your school"}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Lesson Plans Tab */}
+            {activeTab === 'lessonplans' && (
+              <Card className="bg-white/80 backdrop-blur-sm shadow-lg border-emerald-100">
+                <CardHeader>
+                  <CardTitle className="text-emerald-800">School Lesson Plans</CardTitle>
+                  <p className="text-sm text-emerald-600">
+                    Showing {lessonPlans.length} lesson plans for your school
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  {lessonPlansLoading ? (
+                    <div className="text-center py-8 text-gray-500">Loading lesson plans...</div>
+                  ) : lessonPlans.length > 0 ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {lessonPlans.map((plan) => (
+                        <div key={plan.id} className="border border-emerald-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                          <div className="flex items-center justify-between mb-3">
+                            <Badge className={`${
+                              plan.score >= 80 ? 'bg-green-100 text-green-800' :
+                              plan.score >= 60 ? 'bg-yellow-100 text-yellow-800' :
+                              'bg-red-100 text-red-800'
+                            }`}>
+                              Score: {plan.score}/100
+                            </Badge>
+                            <span className="text-sm text-gray-500">
+                              {new Date(plan.created_at).toLocaleDateString()}
+                            </span>
+                          </div>
+                          
+                          <h3 className="font-semibold text-emerald-800 mb-2">{plan.subject}</h3>
+                          <p className="text-sm text-gray-600 mb-3 line-clamp-2">{plan.feedback}</p>
+                          
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm text-gray-500">{plan.teacher_name}</span>
+                            <Button 
+                              size="sm" 
+                              variant="outline"
+                              className="text-emerald-700 border-emerald-300 hover:bg-emerald-50"
+                              onClick={() => window.open(plan.public_url, '_blank')}
+                            >
+                              View Lesson
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-8 text-gray-500">
+                      No lesson plans found for your school
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
           </div>
         </main>
       </div>

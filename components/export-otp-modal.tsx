@@ -56,15 +56,13 @@ export function ExportOTPModal({ isOpen, onClose, onVerified, dataType, recordCo
     setSuccess("");
 
     try {
-      const endpoint = user.role === "manager" 
-        ? `${API_BASE_URL}/dashboard/send-export-otp`
-        : `${API_BASE_URL}/dashboard/send-login-otp`;
+      const endpoint = `${API_BASE_URL}/dashboard/send-export-otp`;
 
       const response = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": user.role === "manager" ? `Bearer ${user.access_token}` : undefined,
+          "Authorization": `Bearer ${user.access_token}`,
         },
         body: JSON.stringify({
           phone: user.phone,
@@ -99,15 +97,13 @@ export function ExportOTPModal({ isOpen, onClose, onVerified, dataType, recordCo
     setError("")
 
     try {
-      const endpoint = user.role === "manager" 
-        ? `${API_BASE_URL}/dashboard/verify-export-otp`
-        : `${API_BASE_URL}/dashboard/login`;
+      const endpoint = `${API_BASE_URL}/dashboard/verify-export-otp`;
 
       const response = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": user.role === "manager" ? `Bearer ${user.access_token}` : undefined,
+          "Authorization": `Bearer ${user.access_token}`
         },
         body: JSON.stringify({
           phone: user.phone,
@@ -123,9 +119,10 @@ export function ExportOTPModal({ isOpen, onClose, onVerified, dataType, recordCo
 
       const result = await response.json();
       
-      if (user.role === "manager" && result.access_token) {
-        // Store the temporary export token
+      if (result.access_token) {
+        // Store the temporary export token with timestamp
         localStorage.setItem('export_token', result.access_token);
+        localStorage.setItem('export_token_timestamp', Date.now().toString());
       }
 
       setSuccess("OTP verified successfully! Starting download...")
@@ -150,10 +147,11 @@ export function ExportOTPModal({ isOpen, onClose, onVerified, dataType, recordCo
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Authorization": `Bearer ${user.access_token}`
         },
         body: JSON.stringify({
           phone: user.phone,
-          user_id: user.id,
+          user_id: user.user_id || user.id,
           data_type: dataType,
           record_count: recordCount,
         }),
