@@ -52,13 +52,13 @@ export default function SchoolDashboardPage() {
   const [lessonPlansLoading, setLessonPlansLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isBlurred, setIsBlurred] = useState(false)
-  const [activeTab, setActiveTab] = useState<'attendance' | 'lessonplans'>('attendance')
+  const [activeTab, setActiveTab] = useState<"attendance" | "lessonplans">("attendance")
   const router = useRouter()
 
   // Screenshot prevention effects
   useEffect(() => {
     // 1. CSS-based screenshot prevention
-    const style = document.createElement('style')
+    const style = document.createElement("style")
     style.textContent = `
       .screenshot-protected {
         -webkit-touch-callout: none;
@@ -108,45 +108,45 @@ export default function SchoolDashboardPage() {
       // Prevent common screenshot shortcuts
       const forbiddenKeys = [
         // Print Screen
-        'PrintScreen',
+        "PrintScreen",
         // Windows + Print Screen
-        'F12', // DevTools
+        "F12", // DevTools
         // Ctrl/Cmd + Shift + S (Firefox screenshot)
         // Ctrl/Cmd + Shift + I (DevTools)
         // Ctrl/Cmd + U (View Source)
       ]
 
-      const isForbiddenCombination = 
+      const isForbiddenCombination =
         // Ctrl+Shift+S (Firefox screenshot)
-        (e.ctrlKey && e.shiftKey && e.key === 'S') ||
+        (e.ctrlKey && e.shiftKey && e.key === "S") ||
         // Ctrl+Shift+I (DevTools)
-        (e.ctrlKey && e.shiftKey && e.key === 'I') ||
+        (e.ctrlKey && e.shiftKey && e.key === "I") ||
         // Ctrl+U (View Source)
-        (e.ctrlKey && e.key === 'u') ||
+        (e.ctrlKey && e.key === "u") ||
         // F12 (DevTools)
-        e.key === 'F12' ||
+        e.key === "F12" ||
         // Print Screen
-        e.key === 'PrintScreen' ||
+        e.key === "PrintScreen" ||
         // Windows + Print Screen
-        (e.metaKey && e.key === 'PrintScreen') ||
+        (e.metaKey && e.key === "PrintScreen") ||
         // Ctrl+P (Print)
-        (e.ctrlKey && e.key === 'p') ||
+        (e.ctrlKey && e.key === "p") ||
         // Cmd combinations on Mac
-        (e.metaKey && e.shiftKey && e.key === 'S') ||
-        (e.metaKey && e.shiftKey && e.key === 'I') ||
-        (e.metaKey && e.key === 'u') ||
-        (e.metaKey && e.key === 'p')
+        (e.metaKey && e.shiftKey && e.key === "S") ||
+        (e.metaKey && e.shiftKey && e.key === "I") ||
+        (e.metaKey && e.shiftKey && e.key === "u") ||
+        (e.metaKey && e.key === "p")
 
       if (forbiddenKeys.includes(e.key) || isForbiddenCombination) {
         e.preventDefault()
         e.stopPropagation()
-        alert('Screenshots and developer tools are disabled for security reasons.')
+        alert("Screenshots and developer tools are disabled for security reasons.")
         return false
       }
     }
 
-    document.addEventListener('keydown', handleKeyDown, { capture: true })
-    return () => document.removeEventListener('keydown', handleKeyDown, { capture: true })
+    document.addEventListener("keydown", handleKeyDown, { capture: true })
+    return () => document.removeEventListener("keydown", handleKeyDown, { capture: true })
   }, [])
 
   useEffect(() => {
@@ -156,8 +156,8 @@ export default function SchoolDashboardPage() {
       return false
     }
 
-    document.addEventListener('contextmenu', handleContextMenu)
-    return () => document.removeEventListener('contextmenu', handleContextMenu)
+    document.addEventListener("contextmenu", handleContextMenu)
+    return () => document.removeEventListener("contextmenu", handleContextMenu)
   }, [])
 
   useEffect(() => {
@@ -180,29 +180,28 @@ export default function SchoolDashboardPage() {
       setIsBlurred(false)
     }
 
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-    window.addEventListener('blur', handleWindowBlur)
-    window.addEventListener('focus', handleWindowFocus)
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+    window.addEventListener("blur", handleWindowBlur)
+    window.addEventListener("focus", handleWindowFocus)
 
     return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
-      window.removeEventListener('blur', handleWindowBlur)
-      window.removeEventListener('focus', handleWindowFocus)
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
+      window.removeEventListener("blur", handleWindowBlur)
+      window.removeEventListener("focus", handleWindowFocus)
     }
   }, [])
 
   useEffect(() => {
     // 6. DevTools detection
-    let devtools = { open: false }
-    
+    const devtools = { open: false }
+
     const checkDevTools = () => {
       const threshold = 160
-      
-      if (window.outerHeight - window.innerHeight > threshold || 
-          window.outerWidth - window.innerWidth > threshold) {
+
+      if (window.outerHeight - window.innerHeight > threshold || window.outerWidth - window.innerWidth > threshold) {
         if (!devtools.open) {
           devtools.open = true
-          alert('Developer tools detected. Please close them for security reasons.')
+          alert("Developer tools detected. Please close them for security reasons.")
           // Optionally redirect or blur content
           setIsBlurred(true)
         }
@@ -255,7 +254,7 @@ export default function SchoolDashboardPage() {
     try {
       setLoading(true)
       setError(null)
-      
+
       // Get the current user's school from their profile
       const authUser = localStorage.getItem("authUser")
       if (!authUser) {
@@ -263,25 +262,25 @@ export default function SchoolDashboardPage() {
         setLoading(false)
         return
       }
-      
+
       const userData = JSON.parse(authUser)
       const userSchool = userData.school
-      
+
       if (!userSchool) {
         setError("School information not found for this user")
         setLoading(false)
         return
       }
-      
+
       const usersData = await fetchUsersData()
       const attendanceResult = await fetchAttendanceData()
-      
+
       // Filter to only show data for the user's school
-      const schoolAttendance = attendanceResult.filter(record => {
-        const recordUser = usersData.find(u => u.phone === record.phone)
+      const schoolAttendance = attendanceResult.filter((record) => {
+        const recordUser = usersData.find((u) => u.phone === record.phone)
         return recordUser?.school === userSchool
       })
-      
+
       const enhancedAttendance = schoolAttendance.map((record) => {
         const user = usersData.find((u) => u.phone === record.phone)
         return {
@@ -291,7 +290,7 @@ export default function SchoolDashboardPage() {
           district: user?.district || "Unknown District",
         }
       })
-      
+
       setAttendanceData(enhancedAttendance)
     } catch (err) {
       console.error("Error fetching school data:", err)
@@ -306,32 +305,32 @@ export default function SchoolDashboardPage() {
     try {
       setLessonPlansLoading(true)
       setError(null)
-      
+
       // Get the current user's school from their profile
       const authUser = localStorage.getItem("authUser")
       if (!authUser) {
         setError("User not authenticated")
         return
       }
-      
+
       const userData = JSON.parse(authUser)
       const userSchool = userData.school
-      
+
       if (!userSchool) {
         setError("School information not found for this user")
         return
       }
-      
+
       // Fetch all lesson plans and users data
       const allPlans = await fetchLessonPlans()
       const usersData = await fetchUsersData()
-      
+
       // Filter lesson plans for the current school
-      const schoolPlans = allPlans.filter(plan => {
-        const teacher = usersData.find(user => user.name === plan.teacher_name)
+      const schoolPlans = allPlans.filter((plan) => {
+        const teacher = usersData.find((user) => user.name === plan.teacher_name)
         return teacher?.school === userSchool
       })
-      
+
       setLessonPlans(schoolPlans)
     } catch (err) {
       console.error("Error fetching lesson plans:", err)
@@ -342,7 +341,7 @@ export default function SchoolDashboardPage() {
   }
 
   // Show loading state
-  if (loading && activeTab === 'attendance') {
+  if (loading && activeTab === "attendance") {
     return <div className="flex items-center justify-center h-screen">Loading school data...</div>
   }
 
@@ -356,17 +355,19 @@ export default function SchoolDashboardPage() {
   const attendanceRate = totalStudents > 0 ? Math.round((totalPresent / totalStudents) * 100) : 0
 
   return (
-    <div className={`flex h-screen bg-gradient-to-br from-emerald-50 to-teal-50 screenshot-protected ${isBlurred ? 'blur-overlay' : ''}`}>
+    <div
+      className={`flex h-screen bg-gradient-to-br from-emerald-50 to-teal-50 screenshot-protected ${isBlurred ? "blur-overlay" : ""}`}
+    >
       {/* Security watermark overlay */}
-      <div 
+      <div
         className="fixed inset-0 pointer-events-none z-50 opacity-5"
         style={{
-          backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'%3E%3Ctext x='50%25' y='50%25' text-anchor='middle' dy='.3em' fill='%23000' font-size='20' transform='rotate(-45 100 100)'%3ECONFIDENTIAL%3C/text%3E%3C/svg%3E")`,
-          backgroundRepeat: 'repeat',
-          backgroundSize: '200px 200px'
+          backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'%3E%3Ctext x='50%25' y='50%25' textAnchor='middle' dy='.3em' fill='%23000' fontSize='20' transform='rotate(-45 100 100)'%3ECONFIDENTIAL%3C/text%3E%3C/svg%3E")`,
+          backgroundRepeat: "repeat",
+          backgroundSize: "200px 200px",
         }}
       />
-      
+
       <DashboardSidebar user={user} />
       <div className="flex-1 flex flex-col overflow-hidden">
         <DashboardHeader user={user} />
@@ -379,14 +380,14 @@ export default function SchoolDashboardPage() {
               <span>/</span>
               <span className="font-medium">School Dashboard</span>
             </div>
-            
+
             <div className="flex items-center justify-between">
               <h1 className="text-3xl font-bold text-emerald-800">School Dashboard</h1>
-              <Button 
+              <Button
                 onClick={() => {
-                  if (activeTab === 'attendance') fetchSchoolData()
+                  if (activeTab === "attendance") fetchSchoolData()
                   else fetchSchoolLessonPlansData()
-                }} 
+                }}
                 disabled={loading || lessonPlansLoading}
                 className="bg-emerald-600 hover:bg-emerald-700 text-white"
               >
@@ -395,15 +396,33 @@ export default function SchoolDashboardPage() {
               </Button>
             </div>
 
+            <Card className="bg-gradient-to-r from-amber-50 to-orange-50 border-amber-200 shadow-lg">
+              <CardContent className="p-6">
+                <div className="flex items-start space-x-3">
+                  <div className="w-6 h-6 bg-amber-500 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                    <span className="text-white text-sm font-bold">!</span>
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-amber-800 mb-2">Disclaimer</h3>
+                    <p className="text-amber-700 text-sm leading-relaxed">
+                      We are currently updating all records in line with the Ministry of Education Uganda guidelines. If
+                      your school is missing or appears incomplete, please don't panic. We are enhancing data security
+                      and will notify you as soon as the update is complete.
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
             {error && (
               <div className="bg-red-50 border border-red-200 rounded-lg p-4">
                 <p className="text-red-800 text-sm mb-3">{error}</p>
-                <Button 
+                <Button
                   onClick={() => {
-                    if (activeTab === 'attendance') fetchSchoolData()
+                    if (activeTab === "attendance") fetchSchoolData()
                     else fetchSchoolLessonPlansData()
-                  }} 
-                  size="sm" 
+                  }}
+                  size="sm"
                   variant="outline"
                   className="text-red-700 border-red-300 hover:bg-red-100 bg-transparent"
                 >
@@ -417,21 +436,21 @@ export default function SchoolDashboardPage() {
             <div className="border-b border-emerald-200">
               <div className="flex space-x-1">
                 <button
-                  onClick={() => setActiveTab('attendance')}
+                  onClick={() => setActiveTab("attendance")}
                   className={`px-4 py-2 text-sm font-medium rounded-t-lg ${
-                    activeTab === 'attendance'
-                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-200 border-b-0'
-                      : 'text-gray-500 hover:text-gray-700'
+                    activeTab === "attendance"
+                      ? "bg-emerald-100 text-emerald-800 border border-emerald-200 border-b-0"
+                      : "text-gray-500 hover:text-gray-700"
                   }`}
                 >
                   Attendance Records
                 </button>
                 <button
-                  onClick={() => setActiveTab('lessonplans')}
+                  onClick={() => setActiveTab("lessonplans")}
                   className={`px-4 py-2 text-sm font-medium rounded-t-lg ${
-                    activeTab === 'lessonplans'
-                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-200 border-b-0'
-                      : 'text-gray-500 hover:text-gray-700'
+                    activeTab === "lessonplans"
+                      ? "bg-emerald-100 text-emerald-800 border border-emerald-200 border-b-0"
+                      : "text-gray-500 hover:text-gray-700"
                   }`}
                 >
                   Lesson Plans
@@ -445,42 +464,42 @@ export default function SchoolDashboardPage() {
                 <CardContent className="p-6">
                   <div className="text-center">
                     <p className="text-emerald-100 text-sm">
-                      {activeTab === 'attendance' ? 'Total Attendance Records' : 'Total Lesson Plans'}
+                      {activeTab === "attendance" ? "Total Attendance Records" : "Total Lesson Plans"}
                     </p>
                     <p className="text-3xl font-bold">
-                      {activeTab === 'attendance' ? attendanceData.length : lessonPlans.length}
+                      {activeTab === "attendance" ? attendanceData.length : lessonPlans.length}
                     </p>
                   </div>
                 </CardContent>
               </Card>
-              
+
               <Card className="bg-gradient-to-r from-blue-500 to-cyan-600 text-white shadow-lg">
                 <CardContent className="p-6">
                   <div className="text-center">
                     <p className="text-blue-100 text-sm">
-                      {activeTab === 'attendance' ? 'Attendance Rate' : 'Average Score'}
+                      {activeTab === "attendance" ? "Attendance Rate" : "Average Score"}
                     </p>
                     <p className="text-3xl font-bold">
-                      {activeTab === 'attendance' ? `${attendanceRate}%` : 
-                        lessonPlans.length > 0 ? 
-                          `${Math.round(lessonPlans.reduce((sum, plan) => sum + plan.score, 0) / lessonPlans.length)}/100` : 
-                          '0/100'
-                      }
+                      {activeTab === "attendance"
+                        ? `${attendanceRate}%`
+                        : lessonPlans.length > 0
+                          ? `${Math.round(lessonPlans.reduce((sum, plan) => sum + plan.score, 0) / lessonPlans.length)}/100`
+                          : "0/100"}
                     </p>
                   </div>
                 </CardContent>
               </Card>
-              
+
               <Card className="bg-gradient-to-r from-purple-500 to-pink-600 text-white shadow-lg">
                 <CardContent className="p-6">
                   <div className="text-center">
                     <p className="text-purple-100 text-sm">
-                      {activeTab === 'attendance' ? 'Total Students' : 'Teachers Submitted'}
+                      {activeTab === "attendance" ? "Total Students" : "Teachers Submitted"}
                     </p>
                     <p className="text-3xl font-bold">
-                      {activeTab === 'attendance' ? totalStudents : 
-                        new Set(lessonPlans.map(plan => plan.teacher_name)).size
-                      }
+                      {activeTab === "attendance"
+                        ? totalStudents
+                        : new Set(lessonPlans.map((plan) => plan.teacher_name)).size}
                     </p>
                   </div>
                 </CardContent>
@@ -488,13 +507,11 @@ export default function SchoolDashboardPage() {
             </div>
 
             {/* Attendance Tab */}
-            {activeTab === 'attendance' && (
+            {activeTab === "attendance" && (
               <Card className="bg-white/80 backdrop-blur-sm shadow-lg border-emerald-100">
                 <CardHeader>
                   <CardTitle className="text-emerald-800">School Attendance Records</CardTitle>
-                  <p className="text-sm text-emerald-600">
-                    Showing {attendanceData.length} records for your school
-                  </p>
+                  <p className="text-sm text-emerald-600">Showing {attendanceData.length} records for your school</p>
                 </CardHeader>
                 <CardContent>
                   {attendanceData.length > 0 ? (
@@ -540,13 +557,11 @@ export default function SchoolDashboardPage() {
             )}
 
             {/* Lesson Plans Tab */}
-            {activeTab === 'lessonplans' && (
+            {activeTab === "lessonplans" && (
               <Card className="bg-white/80 backdrop-blur-sm shadow-lg border-emerald-100">
                 <CardHeader>
                   <CardTitle className="text-emerald-800">School Lesson Plans</CardTitle>
-                  <p className="text-sm text-emerald-600">
-                    Showing {lessonPlans.length} lesson plans for your school
-                  </p>
+                  <p className="text-sm text-emerald-600">Showing {lessonPlans.length} lesson plans for your school</p>
                 </CardHeader>
                 <CardContent>
                   {lessonPlansLoading ? (
@@ -554,30 +569,37 @@ export default function SchoolDashboardPage() {
                   ) : lessonPlans.length > 0 ? (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                       {lessonPlans.map((plan) => (
-                        <div key={plan.id} className="border border-emerald-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                        <div
+                          key={plan.id}
+                          className="border border-emerald-200 rounded-lg p-4 hover:shadow-md transition-shadow"
+                        >
                           <div className="flex items-center justify-between mb-3">
-                            <Badge className={`${
-                              plan.score >= 80 ? 'bg-green-100 text-green-800' :
-                              plan.score >= 60 ? 'bg-yellow-100 text-yellow-800' :
-                              'bg-red-100 text-red-800'
-                            }`}>
+                            <Badge
+                              className={`${
+                                plan.score >= 80
+                                  ? "bg-green-100 text-green-800"
+                                  : plan.score >= 60
+                                    ? "bg-yellow-100 text-yellow-800"
+                                    : "bg-red-100 text-red-800"
+                              }`}
+                            >
                               Score: {plan.score}/100
                             </Badge>
                             <span className="text-sm text-gray-500">
                               {new Date(plan.created_at).toLocaleDateString()}
                             </span>
                           </div>
-                          
+
                           <h3 className="font-semibold text-emerald-800 mb-2">{plan.subject}</h3>
                           <p className="text-sm text-gray-600 mb-3 line-clamp-2">{plan.feedback}</p>
-                          
+
                           <div className="flex items-center justify-between">
                             <span className="text-sm text-gray-500">{plan.teacher_name}</span>
-                            <Button 
-                              size="sm" 
+                            <Button
+                              size="sm"
                               variant="outline"
-                              className="text-emerald-700 border-emerald-300 hover:bg-emerald-50"
-                              onClick={() => window.open(plan.public_url, '_blank')}
+                              className="text-emerald-700 border-emerald-300 hover:bg-emerald-50 bg-transparent"
+                              onClick={() => window.open(plan.public_url, "_blank")}
                             >
                               View Lesson
                             </Button>
@@ -586,9 +608,7 @@ export default function SchoolDashboardPage() {
                       ))}
                     </div>
                   ) : (
-                    <div className="text-center py-8 text-gray-500">
-                      No lesson plans found for your school
-                    </div>
+                    <div className="text-center py-8 text-gray-500">No lesson plans found for your school</div>
                   )}
                 </CardContent>
               </Card>

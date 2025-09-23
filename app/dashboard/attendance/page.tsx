@@ -5,14 +5,13 @@ import { useRouter } from "next/navigation"
 import { DashboardSidebar } from "@/components/dashboard-sidebar"
 import { DashboardHeader } from "@/components/dashboard-header"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Search, Filter, Download, RefreshCw, GitPullRequest as FileRequest } from "lucide-react"
+import { Filter, Download, RefreshCw, GitPullRequest as FileRequest } from "lucide-react"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts"
-import { fetchAttendanceData, fetchUsersData, processAbsenceReasons, fetchUnmaskedAttendanceData, fetchUnmaskedUsersData } from "@/lib/api"
+import { fetchAttendanceData, fetchUsersData, processAbsenceReasons, fetchUnmaskedAttendanceData } from "@/lib/api"
 import { exportToCSV, formatAttendanceDataForExport } from "@/lib/csv-export"
 import { ExportRequestModal } from "@/components/export-request-modal"
 import { ExportOTPModal } from "@/components/export-otp-modal"
@@ -53,7 +52,7 @@ interface EnhancedAttendanceRecord extends AttendanceRecord {
   district?: string
 }
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://hygienequestemdpoints.onrender.com";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://hygienequestemdpoints.onrender.com"
 
 export default function AttendanceAnalysisPage() {
   const [user, setUser] = useState<User | null>(null)
@@ -62,7 +61,6 @@ export default function AttendanceAnalysisPage() {
   const [filteredData, setFilteredData] = useState<EnhancedAttendanceRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [searchTerm, setSearchTerm] = useState("")
   const [selectedDistrict, setSelectedDistrict] = useState("all")
   const [selectedSchool, setSelectedSchool] = useState("all")
   const [showExportRequestModal, setShowExportRequestModal] = useState(false)
@@ -76,7 +74,7 @@ export default function AttendanceAnalysisPage() {
         router.push("/")
         return
       }
-      
+
       try {
         const userData = JSON.parse(authUser)
         // Check if token is expired
@@ -105,15 +103,15 @@ export default function AttendanceAnalysisPage() {
 
   useEffect(() => {
     filterData()
-  }, [attendanceData, searchTerm, selectedDistrict, selectedSchool])
+  }, [attendanceData, selectedDistrict, selectedSchool])
 
   // Helper function to apply masking for managers
   const applyMasking = (data: EnhancedAttendanceRecord[]): EnhancedAttendanceRecord[] => {
     if (user?.role === "manager") {
       return data.map((record, index) => ({
         ...record,
-        teacher_name: `Teacher-${(index + 1).toString().padStart(4, '0')}`,
-        school: `SCH-${(index + 1).toString().padStart(4, '0')}`,
+        teacher_name: `Teacher-${(index + 1).toString().padStart(4, "0")}`,
+        school: `SCH-${(index + 1).toString().padStart(4, "0")}`,
         district: `District-${(index % 10) + 1}`,
       }))
     }
@@ -154,16 +152,6 @@ export default function AttendanceAnalysisPage() {
   const filterData = () => {
     let filtered = attendanceData
 
-    if (searchTerm) {
-      filtered = filtered.filter(
-        (record) =>
-          record.teacher_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          record.school?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          record.subject.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          record.absence_reason.toLowerCase().includes(searchTerm.toLowerCase()),
-      )
-    }
-
     if (selectedDistrict !== "all") {
       filtered = filtered.filter((record) => record.district === selectedDistrict)
     }
@@ -202,161 +190,146 @@ export default function AttendanceAnalysisPage() {
   const handleOTPVerified = async () => {
     // After OTP verification, the export token should be stored in localStorage
     // Now fetch and export the unmasked data
-    await fetchAndExportUnmaskedData();
-  };
+    await fetchAndExportUnmaskedData()
+  }
 
   // New function to fetch and export unmasked data
   const fetchAndExportUnmaskedData = async () => {
     try {
-      setLoading(true);
-      
-      console.log("Starting to fetch unmasked data for export...");
-      
-      // Use the new unmasked data function (which uses public endpoints but requires OTP token validation)
-      const unmaskedAttendance = await fetchUnmaskedAttendanceData();
+      setLoading(true)
 
-      console.log("Fetched unmasked attendance records:", unmaskedAttendance.length);
-      console.log("Sample unmasked attendance record:", unmaskedAttendance[0]);
+      console.log("Starting to fetch unmasked data for export...")
+
+      // Use the new unmasked data function (which uses public endpoints but requires OTP token validation)
+      const unmaskedAttendance = await fetchUnmaskedAttendanceData()
+
+      console.log("Fetched unmasked attendance records:", unmaskedAttendance.length)
+      console.log("Sample unmasked attendance record:", unmaskedAttendance[0])
 
       // The data from public endpoint is already enhanced, so we can use it directly
-      const exportData = unmaskedAttendance;
+      const exportData = unmaskedAttendance
 
-      console.log("Sample records for export:");
+      console.log("Sample records for export:")
       exportData.slice(0, 3).forEach((record, index) => {
         console.log(`Record ${index}:`, {
           teacher_name: record.teacher_name,
           school: record.school,
           district: record.district,
-          phone: record.phone
-        });
-      });
+          phone: record.phone,
+        })
+      })
 
       // Apply current UI filters to the export data
-      let filteredExportData = exportData;
-
-      if (searchTerm) {
-        console.log("Applying search filter:", searchTerm);
-        const beforeCount = filteredExportData.length;
-        filteredExportData = filteredExportData.filter(
-          (record) =>
-            record.teacher_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            record.school?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            record.subject?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            record.absence_reason?.toLowerCase().includes(searchTerm.toLowerCase()),
-        );
-        console.log(`Search filter: ${beforeCount} -> ${filteredExportData.length}`);
-      }
+      let filteredExportData = exportData
 
       // For district and school filters, we need to compare against real values, not masked ones
       // So we'll skip these filters for manager exports to avoid confusion
       if (user?.role !== "manager") {
         if (selectedDistrict !== "all") {
-          console.log("Applying district filter:", selectedDistrict);
-          const beforeCount = filteredExportData.length;
-          filteredExportData = filteredExportData.filter((record) => record.district === selectedDistrict);
-          console.log(`District filter: ${beforeCount} -> ${filteredExportData.length}`);
+          console.log("Applying district filter:", selectedDistrict)
+          const beforeCount = filteredExportData.length
+          filteredExportData = filteredExportData.filter((record) => record.district === selectedDistrict)
+          console.log(`District filter: ${beforeCount} -> ${filteredExportData.length}`)
         }
 
         if (selectedSchool !== "all") {
-          console.log("Applying school filter:", selectedSchool);
-          const beforeCount = filteredExportData.length;
-          filteredExportData = filteredExportData.filter((record) => record.school === selectedSchool);
-          console.log(`School filter: ${beforeCount} -> ${filteredExportData.length}`);
+          console.log("Applying school filter:", selectedSchool)
+          const beforeCount = filteredExportData.length
+          filteredExportData = filteredExportData.filter((record) => record.school === selectedSchool)
+          console.log(`School filter: ${beforeCount} -> ${filteredExportData.length}`)
         }
       }
 
-      console.log("Final filtered data for export:", filteredExportData.length);
+      console.log("Final filtered data for export:", filteredExportData.length)
 
       if (filteredExportData.length === 0) {
-        alert("No data matches the current filters for export");
-        return;
+        alert("No data matches the current filters for export")
+        return
       }
 
       // Format and export the data
-      const formattedExportData = formatAttendanceDataForExport(filteredExportData);
-      const timestamp = new Date().toISOString().split("T")[0];
-      const filename = `attendance-data-unmasked-${timestamp}`;
-      exportToCSV(formattedExportData, filename);
-      
-      console.log("Export completed successfully");
-      alert(`Successfully exported ${filteredExportData.length} unmasked records!`);
-      
+      const formattedExportData = formatAttendanceDataForExport(filteredExportData)
+      const timestamp = new Date().toISOString().split("T")[0]
+      const filename = `attendance-data-unmasked-${timestamp}`
+      exportToCSV(formattedExportData, filename)
+
+      console.log("Export completed successfully")
+      alert(`Successfully exported ${filteredExportData.length} unmasked records!`)
     } catch (err) {
-      console.error("Error exporting unmasked data:", err);
-      alert("Failed to export unmasked data. Please try again.");
+      console.error("Error exporting unmasked data:", err)
+      alert("Failed to export unmasked data. Please try again.")
       // Clear invalid token and show OTP modal again
-      localStorage.removeItem('export_token');
-      localStorage.removeItem('export_token_timestamp');
-      setShowExportOTPModal(true);
+      localStorage.removeItem("export_token")
+      localStorage.removeItem("export_token_timestamp")
+      setShowExportOTPModal(true)
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   const handleExportData = async () => {
     if (filteredData.length === 0) {
-      alert("No data to export");
-      return;
+      alert("No data to export")
+      return
     }
 
     // Check if user is manager - they need OTP verification for unmasked data
     if (user?.role === "manager") {
       try {
         // First check if they already have a valid export token
-        const exportToken = localStorage.getItem('export_token');
-        const tokenTimestamp = localStorage.getItem('export_token_timestamp');
-        
+        const exportToken = localStorage.getItem("export_token")
+        const tokenTimestamp = localStorage.getItem("export_token_timestamp")
+
         console.log("Manager export - checking token:", {
           hasToken: !!exportToken,
           hasTimestamp: !!tokenTimestamp,
-          tokenValue: exportToken?.substring(0, 20) + "..." // Log partial token for debugging
-        });
-        
+          tokenValue: exportToken?.substring(0, 20) + "...", // Log partial token for debugging
+        })
+
         if (exportToken && tokenTimestamp) {
-          const tokenTime = parseInt(tokenTimestamp, 10);
-          const currentTime = Date.now();
+          const tokenTime = Number.parseInt(tokenTimestamp, 10)
+          const currentTime = Date.now()
           // Check if token is still valid (30 minutes)
           if (currentTime - tokenTime <= 30 * 60 * 1000) {
-            console.log("Valid token found, proceeding with unmasked export");
+            console.log("Valid token found, proceeding with unmasked export")
             // Token is valid, fetch unmasked data
-            await fetchAndExportUnmaskedData();
-            return;
+            await fetchAndExportUnmaskedData()
+            return
           } else {
-            console.log("Token expired, clearing and requesting new OTP");
+            console.log("Token expired, clearing and requesting new OTP")
             // Token expired, clear it
-            localStorage.removeItem('export_token');
-            localStorage.removeItem('export_token_timestamp');
+            localStorage.removeItem("export_token")
+            localStorage.removeItem("export_token_timestamp")
           }
         }
-        
-        console.log("No valid token, showing OTP modal");
+
+        console.log("No valid token, showing OTP modal")
         // No valid token, show OTP modal
-        setShowExportOTPModal(true);
-        
+        setShowExportOTPModal(true)
       } catch (error) {
-        console.error("Error checking export token:", error);
-        setShowExportOTPModal(true);
+        console.error("Error checking export token:", error)
+        setShowExportOTPModal(true)
       }
-      return;
+      return
     }
 
     // Superadmins can export directly without OTP (they see unmasked data anyway)
     if (user?.role === "superadmin") {
-      console.log("Superadmin export - direct export");
-      const exportData = formatAttendanceDataForExport(filteredData);
-      const timestamp = new Date().toISOString().split("T")[0];
-      const filename = `attendance-data-${timestamp}`;
-      exportToCSV(exportData, filename);
-      return;
+      console.log("Superadmin export - direct export")
+      const exportData = formatAttendanceDataForExport(filteredData)
+      const timestamp = new Date().toISOString().split("T")[0]
+      const filename = `attendance-data-${timestamp}`
+      exportToCSV(exportData, filename)
+      return
     }
 
     // Fieldworkers need to request permission
     if (user?.role === "fieldworker") {
-      console.log("Fieldworker export - showing request modal");
-      setShowExportRequestModal(true);
-      return;
+      console.log("Fieldworker export - showing request modal")
+      setShowExportRequestModal(true)
+      return
     }
-  };
+  }
 
   if (!user) {
     return <div className="flex items-center justify-center h-screen">Loading...</div>
@@ -408,21 +381,11 @@ export default function AttendanceAnalysisPage() {
               <CardHeader>
                 <CardTitle className="text-emerald-800 flex items-center">
                   <Filter className="w-5 h-5 mr-2" />
-                  Filters & Search
+                  Filters & Export
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                  <div className="relative">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
-                    <Input
-                      placeholder="Search teachers, schools, topics..."
-                      value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
-                      className="pl-10 border-emerald-200 focus:border-emerald-500"
-                    />
-                  </div>
-
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <Select value={selectedDistrict} onValueChange={setSelectedDistrict}>
                     <SelectTrigger className="border-emerald-200 focus:border-emerald-500">
                       <SelectValue placeholder="Select District" />
@@ -452,28 +415,28 @@ export default function AttendanceAnalysisPage() {
                   </Select>
 
                   <Button
-                     variant="outline"
-                     className="border-emerald-200 text-emerald-700 hover:bg-emerald-50 bg-transparent"
-                     onClick={handleExportData}
-                     disabled={loading}
-                 >
-  {user?.role === "fieldworker" ? (
-    <>
-      <FileRequest className="w-4 h-4 mr-2" />
-      Request Export
-    </>
-  ) : user?.role === "manager" ? (
-    <>
-      <Download className="w-4 h-4 mr-2" />
-      Export Data (OTP Required)
-    </>
-  ) : (
-    <>
-      <Download className="w-4 h-4 mr-2" />
-      Export Data
-    </>
-  )}
-</Button>
+                    variant="outline"
+                    className="border-emerald-200 text-emerald-700 hover:bg-emerald-50 bg-transparent"
+                    onClick={handleExportData}
+                    disabled={loading}
+                  >
+                    {user?.role === "fieldworker" ? (
+                      <>
+                        <FileRequest className="w-4 h-4 mr-2" />
+                        Request Export
+                      </>
+                    ) : user?.role === "manager" ? (
+                      <>
+                        <Download className="w-4 h-4 mr-2" />
+                        Export Data (OTP Required)
+                      </>
+                    ) : (
+                      <>
+                        <Download className="w-4 h-4 mr-2" />
+                        Export Data
+                      </>
+                    )}
+                  </Button>
                 </div>
               </CardContent>
             </Card>
