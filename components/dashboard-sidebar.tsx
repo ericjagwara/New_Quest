@@ -1,6 +1,7 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
+import { usePathname } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import {
   LayoutDashboard,
@@ -23,6 +24,7 @@ interface DashboardSidebarProps {
 }
 
 export function DashboardSidebar({ user }: DashboardSidebarProps) {
+  const pathname = usePathname()
   const [activeItem, setActiveItem] = useState("Dashboard")
   const { logout } = useSession()
 
@@ -69,11 +71,18 @@ export function DashboardSidebar({ user }: DashboardSidebarProps) {
   // Filter menu items based on user role
   const filteredMenuItems = menuItems.filter((item) => item.roles.includes(user.role))
 
+  useEffect(() => {
+    const currentItem = filteredMenuItems.find((item) => item.href === pathname)
+    if (currentItem) {
+      setActiveItem(currentItem.name)
+    }
+  }, [pathname, filteredMenuItems])
+
   const handleLogout = () => {
-  // Clear export token when logging out
-  localStorage.removeItem('export_token');
-  localStorage.removeItem('export_token_timestamp');
-  logout();
+    // Clear export token when logging out
+    localStorage.removeItem("export_token")
+    localStorage.removeItem("export_token_timestamp")
+    logout()
   }
 
   const handleNavigation = (item: any) => {

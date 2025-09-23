@@ -5,26 +5,8 @@ import { DashboardSidebar } from "@/components/dashboard-sidebar"
 import { DashboardHeader } from "@/components/dashboard-header"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Users, UserX, TrendingUp, School } from "lucide-react"
-import {
-  PieChart,
-  Pie,
-  Cell,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-} from "recharts"
-import {
-  fetchAttendanceData,
-  fetchUsersData,
-  calculateStats,
-  processAbsenceReasons,
-  processAttendanceByDistrict,
-} from "@/lib/api"
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts"
+import { fetchAttendanceData, fetchUsersData, calculateStats, processAbsenceReasons } from "@/lib/api"
 import type { User, AttendanceRecord, UserRecord, DashboardStats } from "@/lib/types"
 
 export default function DashboardPage() {
@@ -86,7 +68,6 @@ export default function DashboardPage() {
   }
 
   const absenceReasonsData = processAbsenceReasons(attendanceData)
-  const attendanceByDistrictData = processAttendanceByDistrict(attendanceData, usersData)
 
   return (
     <div className="flex h-screen bg-gradient-to-br from-emerald-50 to-teal-50">
@@ -191,10 +172,10 @@ export default function DashboardPage() {
               </Card>
             </div>
 
-            {/* Charts Section */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Charts Section - Removed attendance by district chart, now only showing absence reasons */}
+            <div className="flex justify-center">
               {/* Absence Reasons Pie Chart */}
-              <Card className="bg-white/80 backdrop-blur-sm shadow-lg border-emerald-100">
+              <Card className="bg-white/80 backdrop-blur-sm shadow-lg border-emerald-100 w-full max-w-2xl">
                 <CardHeader>
                   <CardTitle className="text-lg font-semibold text-emerald-800">Absence Reasons</CardTitle>
                 </CardHeader>
@@ -234,31 +215,6 @@ export default function DashboardPage() {
                         </div>
                       )
                     })}
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Attendance by District Bar Chart */}
-              <Card className="bg-white/80 backdrop-blur-sm shadow-lg border-emerald-100">
-                <CardHeader>
-                  <CardTitle className="text-lg font-semibold text-emerald-800">Attendance by District</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="h-64">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={attendanceByDistrictData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="district" tick={{ fontSize: 12 }} angle={-45} textAnchor="end" height={60} />
-                        <YAxis
-                          label={{ value: "Number of Students", angle: -90, position: "insideLeft" }}
-                          tick={{ fontSize: 12 }}
-                        />
-                        <Tooltip />
-                        <Legend />
-                        <Bar dataKey="present" fill="#3b82f6" name="Present" />
-                        <Bar dataKey="absent" fill="#ef4444" name="Absent" />
-                      </BarChart>
-                    </ResponsiveContainer>
                   </div>
                 </CardContent>
               </Card>
