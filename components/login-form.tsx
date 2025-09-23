@@ -1,6 +1,6 @@
 "use client"
 import type React from "react"
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -78,7 +78,7 @@ export function LoginForm() {
       } else {
         // For dashboard users, check if phone exists in dashboard users
         const userResponse = await fetch(`${API_BASE_URL}/dashboard/users/phone/${phone}`)
-        
+
         if (!userResponse.ok) {
           if (userResponse.status === 404) {
             throw new Error("User not found. Please register first.")
@@ -97,7 +97,7 @@ export function LoginForm() {
           loginTime: Date.now(),
           expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
           access_token: "temporary-bypass-token", // Add dummy token for compatibility
-          token_type: "bearer"
+          token_type: "bearer",
         }
 
         if (typeof window !== "undefined") {
@@ -122,6 +122,19 @@ export function LoginForm() {
 
   return (
     <div className="space-y-4">
+      <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-l-4 border-amber-400 rounded-lg px-4 py-2 shadow-sm">
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 bg-amber-500 rounded-full flex items-center justify-center flex-shrink-0">
+            <span className="text-white text-xs font-bold">!</span>
+          </div>
+          <p className="text-amber-800 text-xs font-medium leading-relaxed">
+            <strong>Notice:</strong> We are currently updating all records in line with the Ministry of Education Uganda
+            guidelines. If your school appears incomplete, please be patient as we enhance data security and will notify
+            you upon completion.
+          </p>
+        </div>
+      </div>
+
       <div className="text-center space-y-3">
         <div className="flex justify-center mb-3">
           <div className="relative">
@@ -325,7 +338,8 @@ export function LoginForm() {
               </div>
               <div className="bg-green-100 rounded-lg p-3">
                 <p className="text-xs text-green-800 font-medium leading-relaxed">
-                  Can't login? Ensure you're using the correct phone number and role. Contact your supervisor if issues persist.
+                  Can't login? Ensure you're using the correct phone number and role. Contact your supervisor if issues
+                  persist.
                 </p>
               </div>
             </div>
@@ -336,4 +350,4 @@ export function LoginForm() {
       <div className="text-center text-xs text-gray-500 font-medium">© Hygiene Quest 2025</div>
     </div>
   )
-} 
+}

@@ -5,7 +5,7 @@ import { Clock, AlertTriangle } from "lucide-react"
 import { useRouter } from "next/navigation"
 
 export function SessionTimer() {
-  const [timeLeft, setTimeLeft] = useState<number>(20 * 60 * 1000) // 20 minutes in milliseconds
+  const [timeLeft, setTimeLeft] = useState<number>(15 * 60 * 1000) // 15 minutes in milliseconds
   const [isWarning, setIsWarning] = useState(false)
   const router = useRouter()
 
