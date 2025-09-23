@@ -396,24 +396,6 @@ export default function SchoolDashboardPage() {
               </Button>
             </div>
 
-            <Card className="bg-gradient-to-r from-amber-50 to-orange-50 border-amber-200 shadow-lg">
-              <CardContent className="p-6">
-                <div className="flex items-start space-x-3">
-                  <div className="w-6 h-6 bg-amber-500 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
-                    <span className="text-white text-sm font-bold">!</span>
-                  </div>
-                  <div>
-                    <h3 className="text-lg font-semibold text-amber-800 mb-2">Disclaimer</h3>
-                    <p className="text-amber-700 text-sm leading-relaxed">
-                      We are currently updating all records in line with the Ministry of Education Uganda guidelines. If
-                      your school is missing or appears incomplete, please don't panic. We are enhancing data security
-                      and will notify you as soon as the update is complete.
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
             {error && (
               <div className="bg-red-50 border border-red-200 rounded-lg p-4">
                 <p className="text-red-800 text-sm mb-3">{error}</p>
