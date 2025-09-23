@@ -1,6 +1,6 @@
 import type { User } from "./types"
 
-export const SESSION_DURATION = 20 * 60 * 1000 // 20 minutes in milliseconds
+export const SESSION_DURATION = 15 * 60 * 1000 // 15 minutes in milliseconds
 
 export function isSessionValid(sessionData?: User): boolean {
   if (sessionData) {
