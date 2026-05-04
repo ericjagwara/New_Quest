@@ -1,42 +1,36 @@
-"use client"
-import { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
-import { getValidSession, clearSession, type SessionData } from "@/lib/session"
+"use client";
+
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { getValidSession, clearSession, type SessionData } from "@/lib/session";
 
 export function useSession() {
-  const [session, setSession] = useState<SessionData | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-  const router = useRouter()
+  const [session, setSession] = useState<SessionData | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const router = useRouter();
 
   useEffect(() => {
-    const checkSession = () => {
-      const validSession = getValidSession()
-      setSession(validSession)
-      setIsLoading(false)
+    const validSession = getValidSession();
 
-      if (!validSession && window.location.pathname !== "/") {
-        router.push("/")
-      }
+    if (!validSession) {
+      router.push("/login");
+      return;
     }
 
-    checkSession()
-
-    // Check session every 5 minutes
-    const interval = setInterval(checkSession, 5 * 60 * 1000)
-
-    return () => clearInterval(interval)
-  }, [router])
+    setSession(validSession);
+    setIsLoading(false);
+  }, []);
 
   const logout = () => {
-    clearSession()
-    setSession(null)
-    router.push("/")
-  }
+    clearSession();
+    setSession(null);
+    router.push("/login");
+  };
 
   return {
     session,
     isLoading,
     isAuthenticated: !!session,
     logout,
-  }
+  };
 }

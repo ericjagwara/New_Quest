@@ -1,603 +1,833 @@
 // app/dashboard/school/page.tsx
-"use client"
+"use client";
 
-import { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
-import { DashboardSidebar } from "@/components/dashboard-sidebar"
-import { DashboardHeader } from "@/components/dashboard-header"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { RefreshCw } from "lucide-react"
-import { fetchAttendanceData, fetchUsersData, fetchLessonPlans } from "@/lib/api"
+import { useEffect, useState, useRef } from "react";
+import { useRouter } from "next/navigation";
+import { DashboardSidebar } from "@/components/dashboard-sidebar";
+import { DashboardHeader } from "@/components/dashboard-header";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import {
+  Users,
+  MapPin,
+  Sprout,
+  UserPlus,
+  RefreshCw,
+  Globe,
+  Wheat,
+} from "lucide-react";
 
-interface AttendanceRecord {
-  id: string
-  phone: string
-  subject: string
-  students_present: number
-  students_absent: number
-  absence_reason: string
-  district: string
-  teacher_name?: string
-  school?: string
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_AGROSIGNAL_URL ||
+  "https://agrosignal-dugg.onrender.com";
+
+interface Farmer {
+  id: string;
+  msisdn: string;
+  name: string;
+  country: string;
+  district: string;
+  gps_lat: string;
+  gps_lng: string;
+  gps_captured_at: string;
+  primary_crop: string;
+  language: string;
+  status: string;
+  registered_by_agent_id: string | null;
 }
 
-interface User {
-  id: string
-  name: string
-  phone: string
-  role: string
-  school?: string
-  district?: string
+interface RegistrationResponse {
+  farmer: Farmer;
+  user_id: string;
+  gps_latitude: number;
+  gps_longitude: number;
+  gps_accuracy_m: number;
+  registration_path: string;
+  proximity: null;
+  flag_for_review: boolean;
 }
 
-interface LessonPlan {
-  id: string
-  score: number
-  subject: string
-  feedback: string
-  public_url: string
-  original_filename: string
-  teacher_name: string
-  created_at: string
+interface SessionUser {
+  id: string;
+  name: string;
+  username: string;
+  role: string;
+  email?: string;
+  access_token?: string;
 }
 
-export default function SchoolDashboardPage() {
-  const [user, setUser] = useState<User | null>(null)
-  const [attendanceData, setAttendanceData] = useState<AttendanceRecord[]>([])
-  const [lessonPlans, setLessonPlans] = useState<LessonPlan[]>([])
-  const [loading, setLoading] = useState(true)
-  const [lessonPlansLoading, setLessonPlansLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [isBlurred, setIsBlurred] = useState(false)
-  const [activeTab, setActiveTab] = useState<"attendance" | "lessonplans">("attendance")
-  const router = useRouter()
+const CROPS = [
+  "Coffee",
+  "Maize",
+  "Beans",
+  "Banana",
+  "Cassava",
+  "Rice",
+  "Sorghum",
+  "Millet",
+  "Sunflower",
+  "Tea",
+  "Cotton",
+  "Sugarcane",
+  "Groundnuts",
+  "Sweet Potato",
+  "Other",
+];
 
-  // Screenshot prevention effects
+const LANGUAGES = [
+  { value: "en", label: "English" },
+  { value: "sw", label: "Swahili" },
+  { value: "lg", label: "Luganda" },
+  { value: "fr", label: "French" },
+];
+
+const COUNTRIES = [
+  { value: "UG", label: "Uganda" },
+  { value: "KE", label: "Kenya" },
+  { value: "TZ", label: "Tanzania" },
+  { value: "RW", label: "Rwanda" },
+];
+
+export default function AgroSignalDashboard() {
+  const [user, setUser] = useState<SessionUser | null>(null);
+  const [farmers, setFarmers] = useState<Farmer[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [selectedFarmer, setSelectedFarmer] = useState<Farmer | null>(null);
+  const [mapReady, setMapReady] = useState(false);
+  const mapRef = useRef<any>(null);
+  const mapInstanceRef = useRef<any>(null);
+  const markersRef = useRef<any[]>([]);
+  const router = useRouter();
+
+  const [form, setForm] = useState({
+    msisdn: "",
+    name: "",
+    country: "UG",
+    district: "",
+    primary_crop: "Coffee",
+    language: "en",
+    email: "",
+  });
+
+  // Auth check
   useEffect(() => {
-    // 1. CSS-based screenshot prevention
-    const style = document.createElement("style")
-    style.textContent = `
-      .screenshot-protected {
-        -webkit-touch-callout: none;
-        -webkit-user-select: none;
-        -khtml-user-select: none;
-        -moz-user-select: none;
-        -ms-user-select: none;
-        user-select: none;
-        -webkit-print-color-adjust: exact;
-        print-color-adjust: exact;
+    const authUser = localStorage.getItem("authUser");
+    if (!authUser) {
+      router.push("/");
+      return;
+    }
+    try {
+      const parsed = JSON.parse(authUser);
+      if (parsed.expiresAt && Date.now() > parsed.expiresAt) {
+        localStorage.removeItem("authUser");
+        router.push("/");
+        return;
       }
-      
-      @media print {
-        .screenshot-protected {
-          display: none !important;
-        }
-        body::after {
-          content: "Screenshots and printing are not allowed for this content.";
-          position: fixed;
-          top: 50%;
-          left: 50%;
-          transform: translate(-50%, -50%);
-          font-size: 24px;
-          color: red;
-          z-index: 9999;
-        }
+      setUser(parsed);
+    } catch {
+      router.push("/");
+    }
+  }, [router]);
+
+  // Load farmers
+  const fetchFarmers = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const authUser = localStorage.getItem("authUser");
+      const token = authUser ? JSON.parse(authUser).access_token : null;
+
+      const res = await fetch(`${API_BASE_URL}/farmers`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+
+      if (!res.ok) throw new Error(`Failed to fetch farmers: ${res.status}`);
+      const data = await res.json();
+      // Handle paginated or plain array response
+      const list: Farmer[] = Array.isArray(data)
+        ? data
+        : (data.items ?? data.farmers ?? []);
+      setFarmers(list);
+    } catch (err: any) {
+      setError(err.message || "Failed to load farmers.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (user) fetchFarmers();
+  }, [user]);
+
+  // Init Leaflet map after farmers load
+  useEffect(() => {
+    if (typeof window === "undefined" || !mapRef.current) return;
+
+    const initMap = async () => {
+      const L = (await import("leaflet")).default;
+      await import("leaflet/dist/leaflet.css");
+
+      // Fix default marker icon paths broken by webpack
+      delete (L.Icon.Default.prototype as any)._getIconUrl;
+      L.Icon.Default.mergeOptions({
+        iconRetinaUrl:
+          "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
+        iconUrl:
+          "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
+        shadowUrl:
+          "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
+      });
+
+      if (!mapInstanceRef.current) {
+        mapInstanceRef.current = L.map(mapRef.current).setView(
+          [1.3733, 32.2903],
+          6,
+        );
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: "© OpenStreetMap contributors",
+          maxZoom: 18,
+        }).addTo(mapInstanceRef.current);
       }
-      
-      .blur-overlay {
-        filter: blur(10px);
-        pointer-events: none;
-        transition: filter 0.3s ease;
-      }
-    `
-    document.head.appendChild(style)
+
+      setMapReady(true);
+    };
+
+    initMap();
 
     return () => {
-      if (document.head.contains(style)) {
-        document.head.removeChild(style)
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
       }
-    }
-  }, [])
+    };
+  }, [mapRef.current]);
 
+  // Update markers when farmers change
   useEffect(() => {
-    // 2. Keyboard shortcuts prevention
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Prevent common screenshot shortcuts
-      const forbiddenKeys = [
-        // Print Screen
-        "PrintScreen",
-        // Windows + Print Screen
-        "F12", // DevTools
-        // Ctrl/Cmd + Shift + S (Firefox screenshot)
-        // Ctrl/Cmd + Shift + I (DevTools)
-        // Ctrl/Cmd + U (View Source)
-      ]
+    if (!mapInstanceRef.current || !mapReady) return;
 
-      const isForbiddenCombination =
-        // Ctrl+Shift+S (Firefox screenshot)
-        (e.ctrlKey && e.shiftKey && e.key === "S") ||
-        // Ctrl+Shift+I (DevTools)
-        (e.ctrlKey && e.shiftKey && e.key === "I") ||
-        // Ctrl+U (View Source)
-        (e.ctrlKey && e.key === "u") ||
-        // F12 (DevTools)
-        e.key === "F12" ||
-        // Print Screen
-        e.key === "PrintScreen" ||
-        // Windows + Print Screen
-        (e.metaKey && e.key === "PrintScreen") ||
-        // Ctrl+P (Print)
-        (e.ctrlKey && e.key === "p") ||
-        // Cmd combinations on Mac
-        (e.metaKey && e.shiftKey && e.key === "S") ||
-        (e.metaKey && e.shiftKey && e.key === "I") ||
-        (e.metaKey && e.shiftKey && e.key === "u") ||
-        (e.metaKey && e.key === "p")
+    const updateMarkers = async () => {
+      const L = (await import("leaflet")).default;
 
-      if (forbiddenKeys.includes(e.key) || isForbiddenCombination) {
-        e.preventDefault()
-        e.stopPropagation()
-        alert("Screenshots and developer tools are disabled for security reasons.")
-        return false
+      // Clear old markers
+      markersRef.current.forEach((m) => m.remove());
+      markersRef.current = [];
+
+      const validFarmers = farmers.filter(
+        (f) =>
+          f.gps_lat &&
+          f.gps_lng &&
+          !isNaN(parseFloat(f.gps_lat)) &&
+          !isNaN(parseFloat(f.gps_lng)),
+      );
+
+      validFarmers.forEach((farmer) => {
+        const lat = parseFloat(farmer.gps_lat);
+        const lng = parseFloat(farmer.gps_lng);
+
+        const marker = L.marker([lat, lng]).addTo(mapInstanceRef.current)
+          .bindPopup(`
+            <div style="font-family: sans-serif; min-width: 160px;">
+              <strong style="font-size: 14px; color: #166534;">${farmer.name}</strong><br/>
+              <span style="color: #6b7280; font-size: 12px;">📍 ${farmer.district}, ${farmer.country}</span><br/>
+              <span style="color: #6b7280; font-size: 12px;">🌾 ${farmer.primary_crop}</span><br/>
+              <span style="color: #6b7280; font-size: 12px;">📱 ${farmer.msisdn}</span>
+            </div>
+          `);
+
+        markersRef.current.push(marker);
+      });
+
+      if (validFarmers.length > 1) {
+        const group = L.featureGroup(markersRef.current);
+        mapInstanceRef.current.fitBounds(group.getBounds().pad(0.1));
       }
-    }
+    };
 
-    document.addEventListener("keydown", handleKeyDown, { capture: true })
-    return () => document.removeEventListener("keydown", handleKeyDown, { capture: true })
-  }, [])
+    updateMarkers();
+  }, [farmers, mapReady]);
 
-  useEffect(() => {
-    // 3. Right-click prevention
-    const handleContextMenu = (e: MouseEvent) => {
-      e.preventDefault()
-      return false
-    }
+  // Register farmer
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    setSuccessMsg(null);
 
-    document.addEventListener("contextmenu", handleContextMenu)
-    return () => document.removeEventListener("contextmenu", handleContextMenu)
-  }, [])
-
-  useEffect(() => {
-    // 4. Mobile screenshot detection (approximate)
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        setIsBlurred(true)
-        // Blur content when tab becomes hidden (potential screenshot attempt)
-        setTimeout(() => setIsBlurred(false), 1000)
-      }
-    }
-
-    // 5. Focus/blur detection for potential screen recording
-    const handleWindowBlur = () => {
-      setIsBlurred(true)
-      setTimeout(() => setIsBlurred(false), 500)
-    }
-
-    const handleWindowFocus = () => {
-      setIsBlurred(false)
-    }
-
-    document.addEventListener("visibilitychange", handleVisibilityChange)
-    window.addEventListener("blur", handleWindowBlur)
-    window.addEventListener("focus", handleWindowFocus)
-
-    return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange)
-      window.removeEventListener("blur", handleWindowBlur)
-      window.removeEventListener("focus", handleWindowFocus)
-    }
-  }, [])
-
-  useEffect(() => {
-    // 6. DevTools detection
-    const devtools = { open: false }
-
-    const checkDevTools = () => {
-      const threshold = 160
-
-      if (window.outerHeight - window.innerHeight > threshold || window.outerWidth - window.innerWidth > threshold) {
-        if (!devtools.open) {
-          devtools.open = true
-          alert("Developer tools detected. Please close them for security reasons.")
-          // Optionally redirect or blur content
-          setIsBlurred(true)
-        }
-      } else {
-        if (devtools.open) {
-          devtools.open = false
-          setIsBlurred(false)
-        }
-      }
-    }
-
-    const interval = setInterval(checkDevTools, 500)
-    return () => clearInterval(interval)
-  }, [])
-
-  // Original authentication and data fetching logic
-  useEffect(() => {
-    const checkAuth = () => {
-      try {
-        const authUser = localStorage.getItem("authUser")
-        if (!authUser) {
-          router.push("/")
-          return
-        }
-        const userData = JSON.parse(authUser)
-        if (userData.expiresAt && Date.now() > userData.expiresAt) {
-          localStorage.removeItem("authUser")
-          router.push("/")
-          return
-        }
-        setUser(userData)
-      } catch (error) {
-        console.error("Auth check error:", error)
-        localStorage.removeItem("authUser")
-        router.push("/")
-      }
-    }
-    checkAuth()
-  }, [router])
-
-  useEffect(() => {
-    if (user) {
-      fetchSchoolData()
-      fetchSchoolLessonPlansData()
-    }
-  }, [user])
-
-  // Fetch school attendance data
-  const fetchSchoolData = async () => {
     try {
-      setLoading(true)
-      setError(null)
+      const authUser = localStorage.getItem("authUser");
+      const token = authUser ? JSON.parse(authUser).access_token : null;
 
-      // Get the current user's school from their profile
-      const authUser = localStorage.getItem("authUser")
-      if (!authUser) {
-        setError("User not authenticated")
-        setLoading(false)
-        return
+      const payload: any = {
+        msisdn: form.msisdn,
+        name: form.name,
+        country: form.country,
+        district: form.district,
+        primary_crop: form.primary_crop,
+        language: form.language,
+      };
+      if (form.email) payload.email = form.email;
+
+      const res = await fetch(`${API_BASE_URL}/farmers`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        const detail = errData.detail;
+        throw new Error(
+          Array.isArray(detail)
+            ? detail.map((d: any) => d.msg).join(", ")
+            : detail || `Registration failed: ${res.status}`,
+        );
       }
 
-      const userData = JSON.parse(authUser)
-      const userSchool = userData.school
-
-      if (!userSchool) {
-        setError("School information not found for this user")
-        setLoading(false)
-        return
-      }
-
-      const usersData = await fetchUsersData()
-      const attendanceResult = await fetchAttendanceData()
-
-      // Filter to only show data for the user's school
-      const schoolAttendance = attendanceResult.filter((record) => {
-        const recordUser = usersData.find((u) => u.phone === record.phone)
-        return recordUser?.school === userSchool
-      })
-
-      const enhancedAttendance = schoolAttendance.map((record) => {
-        const user = usersData.find((u) => u.phone === record.phone)
-        return {
-          ...record,
-          teacher_name: user?.name || "Unknown Teacher",
-          school: user?.school || "Unknown School",
-          district: user?.district || "Unknown District",
-        }
-      })
-
-      setAttendanceData(enhancedAttendance)
-    } catch (err) {
-      console.error("Error fetching school data:", err)
-      setError("Failed to load school data. Please check your connection and try again.")
+      const data: RegistrationResponse = await res.json();
+      setFarmers((prev) => [data.farmer, ...prev]);
+      setSuccessMsg(`✓ ${data.farmer.name} registered successfully!`);
+      setForm({
+        msisdn: "",
+        name: "",
+        country: "UG",
+        district: "",
+        primary_crop: "Coffee",
+        language: "en",
+        email: "",
+      });
+      setTimeout(() => {
+        setDialogOpen(false);
+        setSuccessMsg(null);
+      }, 1500);
+    } catch (err: any) {
+      setError(err.message || "Registration failed.");
     } finally {
-      setLoading(false)
+      setSubmitting(false);
     }
-  }
+  };
 
-  // Fetch school lesson plans data
-  const fetchSchoolLessonPlansData = async () => {
-    try {
-      setLessonPlansLoading(true)
-      setError(null)
+  const cropCounts = farmers.reduce((acc: Record<string, number>, f) => {
+    const c = f.primary_crop || "Unknown";
+    acc[c] = (acc[c] || 0) + 1;
+    return acc;
+  }, {});
 
-      // Get the current user's school from their profile
-      const authUser = localStorage.getItem("authUser")
-      if (!authUser) {
-        setError("User not authenticated")
-        return
-      }
-
-      const userData = JSON.parse(authUser)
-      const userSchool = userData.school
-
-      if (!userSchool) {
-        setError("School information not found for this user")
-        return
-      }
-
-      // Fetch all lesson plans and users data
-      const allPlans = await fetchLessonPlans()
-      const usersData = await fetchUsersData()
-
-      // Filter lesson plans for the current school
-      const schoolPlans = allPlans.filter((plan) => {
-        const teacher = usersData.find((user) => user.name === plan.teacher_name)
-        return teacher?.school === userSchool
-      })
-
-      setLessonPlans(schoolPlans)
-    } catch (err) {
-      console.error("Error fetching lesson plans:", err)
-      setError("Failed to load lesson plans")
-    } finally {
-      setLessonPlansLoading(false)
-    }
-  }
-
-  // Show loading state
-  if (loading && activeTab === "attendance") {
-    return <div className="flex items-center justify-center h-screen">Loading school data...</div>
-  }
+  const topCrop = Object.entries(cropCounts).sort((a, b) => b[1] - a[1])[0];
+  const districts = new Set(farmers.map((f) => f.district)).size;
+  const activeCount = farmers.filter((f) => f.status === "active").length;
 
   if (!user) {
-    return <div className="flex items-center justify-center h-screen">Authentication failed. Redirecting...</div>
+    return (
+      <div className="flex items-center justify-center h-screen text-emerald-700">
+        Authenticating...
+      </div>
+    );
   }
 
-  const totalPresent = attendanceData.reduce((sum, record) => sum + record.students_present, 0)
-  const totalAbsent = attendanceData.reduce((sum, record) => sum + record.students_absent, 0)
-  const totalStudents = totalPresent + totalAbsent
-  const attendanceRate = totalStudents > 0 ? Math.round((totalPresent / totalStudents) * 100) : 0
-
   return (
-    <div
-      className={`flex h-screen bg-gradient-to-br from-emerald-50 to-teal-50 screenshot-protected ${isBlurred ? "blur-overlay" : ""}`}
-    >
-      {/* Security watermark overlay */}
-      <div
-        className="fixed inset-0 pointer-events-none z-50 opacity-5"
-        style={{
-          backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'%3E%3Ctext x='50%25' y='50%25' textAnchor='middle' dy='.3em' fill='%23000' fontSize='20' transform='rotate(-45 100 100)'%3ECONFIDENTIAL%3C/text%3E%3C/svg%3E")`,
-          backgroundRepeat: "repeat",
-          backgroundSize: "200px 200px",
-        }}
-      />
-
+    <div className="flex h-screen bg-gradient-to-br from-emerald-50 to-teal-50">
       <DashboardSidebar user={user} />
+
       <div className="flex-1 flex flex-col overflow-hidden">
         <DashboardHeader user={user} />
+
         <main className="flex-1 overflow-x-hidden overflow-y-auto p-6">
-          <div className="space-y-6">
+          <div className="space-y-6 max-w-7xl mx-auto">
+            {/* Breadcrumb */}
             <div className="flex items-center space-x-2 text-sm text-emerald-600">
               <span>🏠</span>
               <span>/</span>
               <span>Dashboard</span>
               <span>/</span>
-              <span className="font-medium">School Dashboard</span>
+              <span className="font-medium">Farmer Management</span>
             </div>
 
+            {/* Header row */}
             <div className="flex items-center justify-between">
-              <h1 className="text-3xl font-bold text-emerald-800">School Dashboard</h1>
-              <Button
-                onClick={() => {
-                  if (activeTab === "attendance") fetchSchoolData()
-                  else fetchSchoolLessonPlansData()
-                }}
-                disabled={loading || lessonPlansLoading}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white"
-              >
-                <RefreshCw className={`w-4 h-4 mr-2 ${loading || lessonPlansLoading ? "animate-spin" : ""}`} />
-                Refresh Data
-              </Button>
-            </div>
-
-            {error && (
-              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                <p className="text-red-800 text-sm mb-3">{error}</p>
+              <div>
+                <h1 className="text-3xl font-bold text-emerald-800">
+                  Farmer Management
+                </h1>
+                <p className="text-emerald-600 text-sm mt-1">
+                  Register and track farmers across all regions
+                </p>
+              </div>
+              <div className="flex gap-3">
                 <Button
-                  onClick={() => {
-                    if (activeTab === "attendance") fetchSchoolData()
-                    else fetchSchoolLessonPlansData()
-                  }}
-                  size="sm"
+                  onClick={fetchFarmers}
+                  disabled={loading}
                   variant="outline"
-                  className="text-red-700 border-red-300 hover:bg-red-100 bg-transparent"
+                  className="border-emerald-300 text-emerald-700 hover:bg-emerald-50 bg-white"
                 >
-                  <RefreshCw className="w-4 h-4 mr-2" />
-                  Retry Connection
+                  <RefreshCw
+                    className={`w-4 h-4 mr-2 ${loading ? "animate-spin" : ""}`}
+                  />
+                  Refresh
                 </Button>
-              </div>
-            )}
 
-            {/* Tabs */}
-            <div className="border-b border-emerald-200">
-              <div className="flex space-x-1">
-                <button
-                  onClick={() => setActiveTab("attendance")}
-                  className={`px-4 py-2 text-sm font-medium rounded-t-lg ${
-                    activeTab === "attendance"
-                      ? "bg-emerald-100 text-emerald-800 border border-emerald-200 border-b-0"
-                      : "text-gray-500 hover:text-gray-700"
-                  }`}
-                >
-                  Attendance Records
-                </button>
-                <button
-                  onClick={() => setActiveTab("lessonplans")}
-                  className={`px-4 py-2 text-sm font-medium rounded-t-lg ${
-                    activeTab === "lessonplans"
-                      ? "bg-emerald-100 text-emerald-800 border border-emerald-200 border-b-0"
-                      : "text-gray-500 hover:text-gray-700"
-                  }`}
-                >
-                  Lesson Plans
-                </button>
-              </div>
-            </div>
+                <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+                  <DialogTrigger asChild>
+                    <Button className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg">
+                      <UserPlus className="w-4 h-4 mr-2" />
+                      Register Farmer
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="max-w-lg">
+                    <DialogHeader>
+                      <DialogTitle className="text-emerald-800 flex items-center gap-2">
+                        <Sprout className="w-5 h-5" />
+                        Register New Farmer
+                      </DialogTitle>
+                    </DialogHeader>
 
-            {/* Stats Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <Card className="bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-lg">
-                <CardContent className="p-6">
-                  <div className="text-center">
-                    <p className="text-emerald-100 text-sm">
-                      {activeTab === "attendance" ? "Total Attendance Records" : "Total Lesson Plans"}
-                    </p>
-                    <p className="text-3xl font-bold">
-                      {activeTab === "attendance" ? attendanceData.length : lessonPlans.length}
-                    </p>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="bg-gradient-to-r from-blue-500 to-cyan-600 text-white shadow-lg">
-                <CardContent className="p-6">
-                  <div className="text-center">
-                    <p className="text-blue-100 text-sm">
-                      {activeTab === "attendance" ? "Attendance Rate" : "Average Score"}
-                    </p>
-                    <p className="text-3xl font-bold">
-                      {activeTab === "attendance"
-                        ? `${attendanceRate}%`
-                        : lessonPlans.length > 0
-                          ? `${Math.round(lessonPlans.reduce((sum, plan) => sum + plan.score, 0) / lessonPlans.length)}/100`
-                          : "0/100"}
-                    </p>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="bg-gradient-to-r from-purple-500 to-pink-600 text-white shadow-lg">
-                <CardContent className="p-6">
-                  <div className="text-center">
-                    <p className="text-purple-100 text-sm">
-                      {activeTab === "attendance" ? "Total Students" : "Teachers Submitted"}
-                    </p>
-                    <p className="text-3xl font-bold">
-                      {activeTab === "attendance"
-                        ? totalStudents
-                        : new Set(lessonPlans.map((plan) => plan.teacher_name)).size}
-                    </p>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* Attendance Tab */}
-            {activeTab === "attendance" && (
-              <Card className="bg-white/80 backdrop-blur-sm shadow-lg border-emerald-100">
-                <CardHeader>
-                  <CardTitle className="text-emerald-800">School Attendance Records</CardTitle>
-                  <p className="text-sm text-emerald-600">Showing {attendanceData.length} records for your school</p>
-                </CardHeader>
-                <CardContent>
-                  {attendanceData.length > 0 ? (
-                    <div className="rounded-lg border border-emerald-200 overflow-hidden">
-                      <Table>
-                        <TableHeader className="bg-emerald-50">
-                          <TableRow>
-                            <TableHead className="text-emerald-800 font-semibold">Teacher</TableHead>
-                            <TableHead className="text-emerald-800 font-semibold">Subject</TableHead>
-                            <TableHead className="text-emerald-800 font-semibold text-center">Present</TableHead>
-                            <TableHead className="text-emerald-800 font-semibold text-center">Absent</TableHead>
-                            <TableHead className="text-emerald-800 font-semibold">Absence Reason</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {attendanceData.map((record) => (
-                            <TableRow key={record.id} className="hover:bg-emerald-50/50">
-                              <TableCell className="font-medium text-gray-900">{record.teacher_name}</TableCell>
-                              <TableCell className="text-gray-700 max-w-xs truncate">{record.subject}</TableCell>
-                              <TableCell className="text-center">
-                                <Badge variant="secondary" className="bg-emerald-100 text-emerald-800">
-                                  {record.students_present}
-                                </Badge>
-                              </TableCell>
-                              <TableCell className="text-center">
-                                <Badge variant="secondary" className="bg-red-100 text-red-800">
-                                  {record.students_absent}
-                                </Badge>
-                              </TableCell>
-                              <TableCell className="text-gray-700 text-sm">{record.absence_reason}</TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  ) : (
-                    <div className="text-center py-8 text-gray-500">
-                      {loading ? "Loading attendance data..." : "No attendance records found for your school"}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Lesson Plans Tab */}
-            {activeTab === "lessonplans" && (
-              <Card className="bg-white/80 backdrop-blur-sm shadow-lg border-emerald-100">
-                <CardHeader>
-                  <CardTitle className="text-emerald-800">School Lesson Plans</CardTitle>
-                  <p className="text-sm text-emerald-600">Showing {lessonPlans.length} lesson plans for your school</p>
-                </CardHeader>
-                <CardContent>
-                  {lessonPlansLoading ? (
-                    <div className="text-center py-8 text-gray-500">Loading lesson plans...</div>
-                  ) : lessonPlans.length > 0 ? (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {lessonPlans.map((plan) => (
-                        <div
-                          key={plan.id}
-                          className="border border-emerald-200 rounded-lg p-4 hover:shadow-md transition-shadow"
-                        >
-                          <div className="flex items-center justify-between mb-3">
-                            <Badge
-                              className={`${
-                                plan.score >= 80
-                                  ? "bg-green-100 text-green-800"
-                                  : plan.score >= 60
-                                    ? "bg-yellow-100 text-yellow-800"
-                                    : "bg-red-100 text-red-800"
-                              }`}
-                            >
-                              Score: {plan.score}/100
-                            </Badge>
-                            <span className="text-sm text-gray-500">
-                              {new Date(plan.created_at).toLocaleDateString()}
-                            </span>
-                          </div>
-
-                          <h3 className="font-semibold text-emerald-800 mb-2">{plan.subject}</h3>
-                          <p className="text-sm text-gray-600 mb-3 line-clamp-2">{plan.feedback}</p>
-
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm text-gray-500">{plan.teacher_name}</span>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="text-emerald-700 border-emerald-300 hover:bg-emerald-50 bg-transparent"
-                              onClick={() => window.open(plan.public_url, "_blank")}
-                            >
-                              View Lesson
-                            </Button>
-                          </div>
+                    <form onSubmit={handleRegister} className="space-y-4 mt-2">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1 col-span-2">
+                          <Label className="text-sm font-semibold text-gray-700">
+                            Full Name *
+                          </Label>
+                          <Input
+                            value={form.name}
+                            onChange={(e) =>
+                              setForm({ ...form, name: e.target.value })
+                            }
+                            placeholder="e.g. Brian Katende"
+                            required
+                            className="border-gray-200 focus:border-emerald-400"
+                          />
                         </div>
-                      ))}
+
+                        <div className="space-y-1 col-span-2">
+                          <Label className="text-sm font-semibold text-gray-700">
+                            Phone (MSISDN) *
+                          </Label>
+                          <Input
+                            value={form.msisdn}
+                            onChange={(e) =>
+                              setForm({ ...form, msisdn: e.target.value })
+                            }
+                            placeholder="+256700000000"
+                            required
+                            className="border-gray-200 focus:border-emerald-400"
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <Label className="text-sm font-semibold text-gray-700">
+                            Country *
+                          </Label>
+                          <select
+                            value={form.country}
+                            onChange={(e) =>
+                              setForm({ ...form, country: e.target.value })
+                            }
+                            required
+                            className="w-full h-10 border border-gray-200 rounded-md px-3 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-300"
+                          >
+                            {COUNTRIES.map((c) => (
+                              <option key={c.value} value={c.value}>
+                                {c.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="space-y-1">
+                          <Label className="text-sm font-semibold text-gray-700">
+                            District *
+                          </Label>
+                          <Input
+                            value={form.district}
+                            onChange={(e) =>
+                              setForm({ ...form, district: e.target.value })
+                            }
+                            placeholder="e.g. Kampala"
+                            required
+                            className="border-gray-200 focus:border-emerald-400"
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <Label className="text-sm font-semibold text-gray-700">
+                            Primary Crop *
+                          </Label>
+                          <select
+                            value={form.primary_crop}
+                            onChange={(e) =>
+                              setForm({ ...form, primary_crop: e.target.value })
+                            }
+                            required
+                            className="w-full h-10 border border-gray-200 rounded-md px-3 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-300"
+                          >
+                            {CROPS.map((c) => (
+                              <option key={c} value={c}>
+                                {c}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="space-y-1">
+                          <Label className="text-sm font-semibold text-gray-700">
+                            Language *
+                          </Label>
+                          <select
+                            value={form.language}
+                            onChange={(e) =>
+                              setForm({ ...form, language: e.target.value })
+                            }
+                            required
+                            className="w-full h-10 border border-gray-200 rounded-md px-3 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-300"
+                          >
+                            {LANGUAGES.map((l) => (
+                              <option key={l.value} value={l.value}>
+                                {l.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="space-y-1 col-span-2">
+                          <Label className="text-sm font-semibold text-gray-700">
+                            Email{" "}
+                            <span className="text-gray-400 font-normal">
+                              (optional)
+                            </span>
+                          </Label>
+                          <Input
+                            type="email"
+                            value={form.email}
+                            onChange={(e) =>
+                              setForm({ ...form, email: e.target.value })
+                            }
+                            placeholder="farmer@example.com"
+                            className="border-gray-200 focus:border-emerald-400"
+                          />
+                        </div>
+                      </div>
+
+                      {error && (
+                        <div className="bg-red-50 border-l-4 border-red-400 rounded p-3 text-sm text-red-800">
+                          {error}
+                        </div>
+                      )}
+                      {successMsg && (
+                        <div className="bg-emerald-50 border-l-4 border-emerald-400 rounded p-3 text-sm text-emerald-800">
+                          {successMsg}
+                        </div>
+                      )}
+
+                      <Button
+                        type="submit"
+                        disabled={submitting}
+                        className="w-full bg-emerald-600 hover:bg-emerald-700 text-white"
+                      >
+                        {submitting ? "Registering..." : "Register Farmer"}
+                      </Button>
+                    </form>
+                  </DialogContent>
+                </Dialog>
+              </div>
+            </div>
+
+            {/* Error banner */}
+            {error && !dialogOpen && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-800 text-sm">
+                {error}
+              </div>
+            )}
+
+            {/* Stats cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <Card className="bg-gradient-to-br from-emerald-500 to-emerald-600 text-white shadow-lg border-0">
+                <CardContent className="p-5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-emerald-100 text-xs font-medium uppercase tracking-wide">
+                        Total Farmers
+                      </p>
+                      <p className="text-4xl font-bold mt-1">
+                        {farmers.length}
+                      </p>
                     </div>
+                    <Users className="w-10 h-10 text-emerald-200" />
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-gradient-to-br from-teal-500 to-teal-600 text-white shadow-lg border-0">
+                <CardContent className="p-5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-teal-100 text-xs font-medium uppercase tracking-wide">
+                        Active
+                      </p>
+                      <p className="text-4xl font-bold mt-1">{activeCount}</p>
+                    </div>
+                    <Globe className="w-10 h-10 text-teal-200" />
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-gradient-to-br from-cyan-500 to-cyan-600 text-white shadow-lg border-0">
+                <CardContent className="p-5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-cyan-100 text-xs font-medium uppercase tracking-wide">
+                        Districts
+                      </p>
+                      <p className="text-4xl font-bold mt-1">{districts}</p>
+                    </div>
+                    <MapPin className="w-10 h-10 text-cyan-200" />
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-gradient-to-br from-green-500 to-green-600 text-white shadow-lg border-0">
+                <CardContent className="p-5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-green-100 text-xs font-medium uppercase tracking-wide">
+                        Top Crop
+                      </p>
+                      <p className="text-xl font-bold mt-1 truncate">
+                        {topCrop ? topCrop[0] : "—"}
+                      </p>
+                      {topCrop && (
+                        <p className="text-green-200 text-xs">
+                          {topCrop[1]} farmers
+                        </p>
+                      )}
+                    </div>
+                    <Wheat className="w-10 h-10 text-green-200" />
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Map + Table row */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Leaflet Map */}
+              <Card className="shadow-lg border-emerald-100 overflow-hidden">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-emerald-800 flex items-center gap-2 text-base">
+                    <MapPin className="w-5 h-5" />
+                    Farmer Locations
+                    <Badge
+                      variant="secondary"
+                      className="ml-auto bg-emerald-100 text-emerald-700"
+                    >
+                      {farmers.filter((f) => f.gps_lat && f.gps_lng).length}{" "}
+                      mapped
+                    </Badge>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div
+                    ref={mapRef}
+                    style={{ height: "420px", width: "100%", zIndex: 0 }}
+                  />
+                </CardContent>
+              </Card>
+
+              {/* Crop breakdown */}
+              <Card className="shadow-lg border-emerald-100">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-emerald-800 flex items-center gap-2 text-base">
+                    <Sprout className="w-5 h-5" />
+                    Crop Distribution
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {Object.keys(cropCounts).length === 0 ? (
+                    <p className="text-gray-400 text-sm text-center py-8">
+                      No data yet
+                    </p>
                   ) : (
-                    <div className="text-center py-8 text-gray-500">No lesson plans found for your school</div>
+                    <div className="space-y-3">
+                      {Object.entries(cropCounts)
+                        .sort((a, b) => b[1] - a[1])
+                        .map(([crop, count]) => {
+                          const pct = Math.round(
+                            (count / farmers.length) * 100,
+                          );
+                          return (
+                            <div key={crop}>
+                              <div className="flex justify-between text-sm mb-1">
+                                <span className="font-medium text-gray-700">
+                                  {crop}
+                                </span>
+                                <span className="text-gray-500">
+                                  {count} ({pct}%)
+                                </span>
+                              </div>
+                              <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                                <div
+                                  className="h-full bg-gradient-to-r from-emerald-400 to-teal-500 rounded-full transition-all duration-500"
+                                  style={{ width: `${pct}%` }}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
                   )}
                 </CardContent>
               </Card>
-            )}
+            </div>
+
+            {/* Farmers table */}
+            <Card className="shadow-lg border-emerald-100">
+              <CardHeader>
+                <CardTitle className="text-emerald-800 flex items-center gap-2">
+                  <Users className="w-5 h-5" />
+                  Registered Farmers
+                  <Badge className="ml-auto bg-emerald-600 text-white">
+                    {farmers.length} total
+                  </Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {loading ? (
+                  <div className="text-center py-12 text-emerald-600">
+                    Loading farmers...
+                  </div>
+                ) : farmers.length === 0 ? (
+                  <div className="text-center py-12 text-gray-400">
+                    <Sprout className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                    <p>No farmers registered yet.</p>
+                    <p className="text-sm mt-1">
+                      Use the button above to register the first farmer.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-emerald-100 overflow-hidden">
+                    <Table>
+                      <TableHeader className="bg-emerald-50">
+                        <TableRow>
+                          <TableHead className="text-emerald-800 font-semibold">
+                            Name
+                          </TableHead>
+                          <TableHead className="text-emerald-800 font-semibold">
+                            Phone
+                          </TableHead>
+                          <TableHead className="text-emerald-800 font-semibold">
+                            District
+                          </TableHead>
+                          <TableHead className="text-emerald-800 font-semibold">
+                            Crop
+                          </TableHead>
+                          <TableHead className="text-emerald-800 font-semibold">
+                            Status
+                          </TableHead>
+                          <TableHead className="text-emerald-800 font-semibold">
+                            Location
+                          </TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {farmers.map((farmer) => (
+                          <TableRow
+                            key={farmer.id}
+                            className="hover:bg-emerald-50/50 cursor-pointer"
+                            onClick={() => {
+                              setSelectedFarmer(farmer);
+                              if (
+                                mapInstanceRef.current &&
+                                farmer.gps_lat &&
+                                farmer.gps_lng
+                              ) {
+                                mapInstanceRef.current.setView(
+                                  [
+                                    parseFloat(farmer.gps_lat),
+                                    parseFloat(farmer.gps_lng),
+                                  ],
+                                  12,
+                                );
+                                // Scroll to map
+                                mapRef.current?.scrollIntoView({
+                                  behavior: "smooth",
+                                  block: "center",
+                                });
+                              }
+                            }}
+                          >
+                            <TableCell className="font-medium text-gray-900">
+                              {farmer.name}
+                            </TableCell>
+                            <TableCell className="text-gray-600 text-sm">
+                              {farmer.msisdn}
+                            </TableCell>
+                            <TableCell className="text-gray-600">
+                              {farmer.district}
+                            </TableCell>
+                            <TableCell>
+                              <Badge
+                                variant="outline"
+                                className="border-emerald-300 text-emerald-700 capitalize"
+                              >
+                                {farmer.primary_crop}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              <Badge
+                                className={
+                                  farmer.status === "active"
+                                    ? "bg-green-100 text-green-800"
+                                    : "bg-gray-100 text-gray-600"
+                                }
+                              >
+                                {farmer.status}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-xs text-gray-500">
+                              {farmer.gps_lat && farmer.gps_lng ? (
+                                <span className="flex items-center gap-1 text-emerald-600">
+                                  <MapPin className="w-3 h-3" />
+                                  {parseFloat(farmer.gps_lat).toFixed(4)},{" "}
+                                  {parseFloat(farmer.gps_lng).toFixed(4)}
+                                </span>
+                              ) : (
+                                <span className="text-gray-300">—</span>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </div>
         </main>
       </div>
     </div>
-  )
+  );
 }
