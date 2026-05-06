@@ -1,7 +1,7 @@
 // app/dashboard/school/page.tsx
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { DashboardSidebar } from "@/components/dashboard-sidebar";
 import { DashboardHeader } from "@/components/dashboard-header";
@@ -54,17 +54,6 @@ interface Farmer {
   registered_by_agent_id: string | null;
 }
 
-interface RegistrationResponse {
-  farmer: Farmer;
-  user_id: string;
-  gps_latitude: number;
-  gps_longitude: number;
-  gps_accuracy_m: number;
-  registration_path: string;
-  proximity: null;
-  flag_for_review: boolean;
-}
-
 interface SessionUser {
   id: string;
   name: string;
@@ -91,14 +80,12 @@ const CROPS = [
   "Sweet Potato",
   "Other",
 ];
-
 const LANGUAGES = [
   { value: "en", label: "English" },
   { value: "sw", label: "Swahili" },
   { value: "lg", label: "Luganda" },
   { value: "fr", label: "French" },
 ];
-
 const COUNTRIES = [
   { value: "UG", label: "Uganda" },
   { value: "KE", label: "Kenya" },
@@ -106,19 +93,41 @@ const COUNTRIES = [
   { value: "RW", label: "Rwanda" },
 ];
 
+function jitterDuplicates(
+  farmers: Farmer[],
+): Array<Farmer & { _lat: number; _lng: number }> {
+  const seen: Record<string, number> = {};
+  return farmers.map((f) => {
+    const lat = parseFloat(f.gps_lat);
+    const lng = parseFloat(f.gps_lng);
+    if (isNaN(lat) || isNaN(lng)) return { ...f, _lat: lat, _lng: lng };
+    const key = `${lat.toFixed(5)},${lng.toFixed(5)}`;
+    const count = seen[key] ?? 0;
+    seen[key] = count + 1;
+    const angle = count * 137.5 * (Math.PI / 180);
+    const radius = count === 0 ? 0 : 0.002 * Math.sqrt(count);
+    return {
+      ...f,
+      _lat: lat + radius * Math.sin(angle),
+      _lng: lng + radius * Math.cos(angle),
+    };
+  });
+}
+
 export default function AgroSignalDashboard() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [farmers, setFarmers] = useState<Farmer[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [selectedFarmer, setSelectedFarmer] = useState<Farmer | null>(null);
-  const [mapReady, setMapReady] = useState(false);
-  const mapRef = useRef<any>(null);
+
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<any>(null);
   const markersRef = useRef<any[]>([]);
+  const farmersRef = useRef<Farmer[]>([]);
   const router = useRouter();
 
   const [form, setForm] = useState({
@@ -131,7 +140,12 @@ export default function AgroSignalDashboard() {
     email: "",
   });
 
-  // Auth check
+  // Keep farmersRef in sync so the callback ref can access latest farmers
+  useEffect(() => {
+    farmersRef.current = farmers;
+  }, [farmers]);
+
+  // Auth
   useEffect(() => {
     const authUser = localStorage.getItem("authUser");
     if (!authUser) {
@@ -151,136 +165,166 @@ export default function AgroSignalDashboard() {
     }
   }, [router]);
 
-  // Load farmers
-  const fetchFarmers = async () => {
+  // Fetch farmers
+  const fetchFarmers = useCallback(async () => {
     try {
       setLoading(true);
-      setError(null);
+      setFetchError(null);
       const authUser = localStorage.getItem("authUser");
       const token = authUser ? JSON.parse(authUser).access_token : null;
-
       const res = await fetch(`${API_BASE_URL}/farmers`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
       });
-
-      if (!res.ok) throw new Error(`Failed to fetch farmers: ${res.status}`);
+      if (!res.ok) throw new Error(`Failed to fetch farmers (${res.status})`);
       const data = await res.json();
-      // Handle paginated or plain array response
       const list: Farmer[] = Array.isArray(data)
         ? data
-        : (data.items ?? data.farmers ?? []);
+        : Array.isArray(data.items)
+          ? data.items
+          : (data.farmers ?? []);
       setFarmers(list);
     } catch (err: any) {
-      setError(err.message || "Failed to load farmers.");
+      setFetchError(err.message || "Failed to load farmers.");
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (user) fetchFarmers();
-  }, [user]);
+  }, [user, fetchFarmers]);
 
-  // Init Leaflet map after farmers load
-  useEffect(() => {
-    if (typeof window === "undefined" || !mapRef.current) return;
+  // Draw markers — called after map is ready and after farmers update
+  const drawMarkers = useCallback((L: any, map: any, farmerList: Farmer[]) => {
+    // Clear old
+    markersRef.current.forEach((m) => map.removeLayer(m));
+    markersRef.current = [];
 
-    const initMap = async () => {
-      const L = (await import("leaflet")).default;
-      await import("leaflet/dist/leaflet.css");
+    const valid = farmerList.filter(
+      (f) =>
+        f.gps_lat &&
+        f.gps_lng &&
+        !isNaN(parseFloat(f.gps_lat)) &&
+        !isNaN(parseFloat(f.gps_lng)),
+    );
+    if (valid.length === 0) return;
 
-      // Fix default marker icon paths broken by webpack
-      delete (L.Icon.Default.prototype as any)._getIconUrl;
-      L.Icon.Default.mergeOptions({
-        iconRetinaUrl:
-          "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
-        iconUrl:
-          "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
-        shadowUrl:
-          "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
-      });
+    const jittered = jitterDuplicates(valid);
 
-      if (!mapInstanceRef.current) {
-        mapInstanceRef.current = L.map(mapRef.current).setView(
+    jittered.forEach((farmer) => {
+      const popup = L.popup().setContent(`
+        <div style="font-family:sans-serif;min-width:180px;line-height:1.7">
+          <strong style="font-size:13px;color:#166534">${farmer.name}</strong><br/>
+          <span style="color:#6b7280;font-size:12px">📍 ${farmer.district}, ${farmer.country}</span><br/>
+          <span style="color:#6b7280;font-size:12px">🌾 ${farmer.primary_crop}</span><br/>
+          <span style="color:#6b7280;font-size:12px">📱 ${farmer.msisdn}</span><br/>
+          <span style="color:#9ca3af;font-size:11px">${parseFloat(farmer.gps_lat).toFixed(5)}, ${parseFloat(farmer.gps_lng).toFixed(5)}</span>
+        </div>`);
+
+      const marker = L.marker([farmer._lat, farmer._lng])
+        .bindPopup(popup)
+        .addTo(map);
+      markersRef.current.push(marker);
+    });
+
+    try {
+      const group = L.featureGroup(markersRef.current);
+      map.fitBounds(group.getBounds().pad(0.3));
+    } catch (_) {
+      // fitBounds can throw if bounds are invalid
+    }
+  }, []);
+
+  // Callback ref — fires the moment the div enters the DOM
+  const mapCallbackRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (!node) return; // unmounting
+      if (mapInstanceRef.current) return; // already initialised
+
+      mapContainerRef.current = node;
+
+      // Async init inside the callback ref
+      (async () => {
+        const L = (await import("leaflet")).default;
+
+        // Inject Leaflet CSS once
+        if (!document.getElementById("leaflet-css")) {
+          const link = document.createElement("link");
+          link.id = "leaflet-css";
+          link.rel = "stylesheet";
+          link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+          document.head.appendChild(link);
+          // Small wait for CSS to load so tiles render correctly
+          await new Promise((r) => setTimeout(r, 100));
+        }
+
+        // Fix broken webpack icon paths
+        delete (L.Icon.Default.prototype as any)._getIconUrl;
+        L.Icon.Default.mergeOptions({
+          iconRetinaUrl:
+            "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+          iconUrl:
+            "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+          shadowUrl:
+            "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+        });
+
+        const map = L.map(node, { zoomControl: true }).setView(
           [1.3733, 32.2903],
           6,
         );
+
         L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
           attribution: "© OpenStreetMap contributors",
           maxZoom: 18,
-        }).addTo(mapInstanceRef.current);
-      }
+        }).addTo(map);
 
-      setMapReady(true);
-    };
+        mapInstanceRef.current = map;
 
-    initMap();
+        // Draw any farmers that already loaded before the map was ready
+        if (farmersRef.current.length > 0) {
+          drawMarkers(L, map, farmersRef.current);
+        }
 
+        // Subscribe to future farmer updates via a custom event
+        node.addEventListener("farmers-updated", ((e: CustomEvent) => {
+          drawMarkers(L, map, e.detail as Farmer[]);
+        }) as EventListener);
+      })();
+    },
+    [drawMarkers],
+  );
+
+  // Fire custom event whenever farmers state changes
+  useEffect(() => {
+    const node = mapContainerRef.current;
+    if (!node || !mapInstanceRef.current) return;
+    node.dispatchEvent(new CustomEvent("farmers-updated", { detail: farmers }));
+  }, [farmers]);
+
+  // Cleanup
+  useEffect(() => {
     return () => {
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
       }
     };
-  }, [mapRef.current]);
-
-  // Update markers when farmers change
-  useEffect(() => {
-    if (!mapInstanceRef.current || !mapReady) return;
-
-    const updateMarkers = async () => {
-      const L = (await import("leaflet")).default;
-
-      // Clear old markers
-      markersRef.current.forEach((m) => m.remove());
-      markersRef.current = [];
-
-      const validFarmers = farmers.filter(
-        (f) =>
-          f.gps_lat &&
-          f.gps_lng &&
-          !isNaN(parseFloat(f.gps_lat)) &&
-          !isNaN(parseFloat(f.gps_lng)),
-      );
-
-      validFarmers.forEach((farmer) => {
-        const lat = parseFloat(farmer.gps_lat);
-        const lng = parseFloat(farmer.gps_lng);
-
-        const marker = L.marker([lat, lng]).addTo(mapInstanceRef.current)
-          .bindPopup(`
-            <div style="font-family: sans-serif; min-width: 160px;">
-              <strong style="font-size: 14px; color: #166534;">${farmer.name}</strong><br/>
-              <span style="color: #6b7280; font-size: 12px;">📍 ${farmer.district}, ${farmer.country}</span><br/>
-              <span style="color: #6b7280; font-size: 12px;">🌾 ${farmer.primary_crop}</span><br/>
-              <span style="color: #6b7280; font-size: 12px;">📱 ${farmer.msisdn}</span>
-            </div>
-          `);
-
-        markersRef.current.push(marker);
-      });
-
-      if (validFarmers.length > 1) {
-        const group = L.featureGroup(markersRef.current);
-        mapInstanceRef.current.fitBounds(group.getBounds().pad(0.1));
-      }
-    };
-
-    updateMarkers();
-  }, [farmers, mapReady]);
+  }, []);
 
   // Register farmer
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
-    setError(null);
+    setFormError(null);
     setSuccessMsg(null);
-
     try {
       const authUser = localStorage.getItem("authUser");
       const token = authUser ? JSON.parse(authUser).access_token : null;
-
-      const payload: any = {
+      const payload: Record<string, string> = {
         msisdn: form.msisdn,
         name: form.name,
         country: form.country,
@@ -298,20 +342,19 @@ export default function AgroSignalDashboard() {
         },
         body: JSON.stringify(payload),
       });
-
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         const detail = errData.detail;
         throw new Error(
           Array.isArray(detail)
             ? detail.map((d: any) => d.msg).join(", ")
-            : detail || `Registration failed: ${res.status}`,
+            : detail || `Failed (${res.status})`,
         );
       }
-
-      const data: RegistrationResponse = await res.json();
-      setFarmers((prev) => [data.farmer, ...prev]);
-      setSuccessMsg(`✓ ${data.farmer.name} registered successfully!`);
+      const data = await res.json();
+      const newFarmer: Farmer = data.farmer ?? data;
+      setFarmers((prev) => [newFarmer, ...prev]);
+      setSuccessMsg(`✓ ${newFarmer.name} registered successfully!`);
       setForm({
         msisdn: "",
         name: "",
@@ -324,39 +367,43 @@ export default function AgroSignalDashboard() {
       setTimeout(() => {
         setDialogOpen(false);
         setSuccessMsg(null);
-      }, 1500);
+      }, 1600);
     } catch (err: any) {
-      setError(err.message || "Registration failed.");
+      setFormError(err.message || "Registration failed.");
     } finally {
       setSubmitting(false);
     }
   };
 
-  const cropCounts = farmers.reduce((acc: Record<string, number>, f) => {
-    const c = f.primary_crop || "Unknown";
+  // Stats
+  const cropCounts = farmers.reduce<Record<string, number>>((acc, f) => {
+    const c = (f.primary_crop || "Unknown").toLowerCase();
     acc[c] = (acc[c] || 0) + 1;
     return acc;
   }, {});
-
   const topCrop = Object.entries(cropCounts).sort((a, b) => b[1] - a[1])[0];
   const districts = new Set(farmers.map((f) => f.district)).size;
   const activeCount = farmers.filter((f) => f.status === "active").length;
+  const mappedCount = farmers.filter(
+    (f) =>
+      f.gps_lat &&
+      f.gps_lng &&
+      !isNaN(parseFloat(f.gps_lat)) &&
+      !isNaN(parseFloat(f.gps_lng)),
+  ).length;
 
-  if (!user) {
+  if (!user)
     return (
       <div className="flex items-center justify-center h-screen text-emerald-700">
-        Authenticating...
+        Authenticating…
       </div>
     );
-  }
 
   return (
     <div className="flex h-screen bg-gradient-to-br from-emerald-50 to-teal-50">
       <DashboardSidebar user={user} />
-
       <div className="flex-1 flex flex-col overflow-hidden">
         <DashboardHeader user={user} />
-
         <main className="flex-1 overflow-x-hidden overflow-y-auto p-6">
           <div className="space-y-6 max-w-7xl mx-auto">
             {/* Breadcrumb */}
@@ -368,8 +415,8 @@ export default function AgroSignalDashboard() {
               <span className="font-medium">Farmer Management</span>
             </div>
 
-            {/* Header row */}
-            <div className="flex items-center justify-between">
+            {/* Header */}
+            <div className="flex items-center justify-between flex-wrap gap-3">
               <div>
                 <h1 className="text-3xl font-bold text-emerald-800">
                   Farmer Management
@@ -390,7 +437,6 @@ export default function AgroSignalDashboard() {
                   />
                   Refresh
                 </Button>
-
                 <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
                   <DialogTrigger asChild>
                     <Button className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg">
@@ -405,7 +451,6 @@ export default function AgroSignalDashboard() {
                         Register New Farmer
                       </DialogTitle>
                     </DialogHeader>
-
                     <form onSubmit={handleRegister} className="space-y-4 mt-2">
                       <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-1 col-span-2">
@@ -422,7 +467,6 @@ export default function AgroSignalDashboard() {
                             className="border-gray-200 focus:border-emerald-400"
                           />
                         </div>
-
                         <div className="space-y-1 col-span-2">
                           <Label className="text-sm font-semibold text-gray-700">
                             Phone (MSISDN) *
@@ -437,7 +481,6 @@ export default function AgroSignalDashboard() {
                             className="border-gray-200 focus:border-emerald-400"
                           />
                         </div>
-
                         <div className="space-y-1">
                           <Label className="text-sm font-semibold text-gray-700">
                             Country *
@@ -457,7 +500,6 @@ export default function AgroSignalDashboard() {
                             ))}
                           </select>
                         </div>
-
                         <div className="space-y-1">
                           <Label className="text-sm font-semibold text-gray-700">
                             District *
@@ -472,7 +514,6 @@ export default function AgroSignalDashboard() {
                             className="border-gray-200 focus:border-emerald-400"
                           />
                         </div>
-
                         <div className="space-y-1">
                           <Label className="text-sm font-semibold text-gray-700">
                             Primary Crop *
@@ -492,7 +533,6 @@ export default function AgroSignalDashboard() {
                             ))}
                           </select>
                         </div>
-
                         <div className="space-y-1">
                           <Label className="text-sm font-semibold text-gray-700">
                             Language *
@@ -512,7 +552,6 @@ export default function AgroSignalDashboard() {
                             ))}
                           </select>
                         </div>
-
                         <div className="space-y-1 col-span-2">
                           <Label className="text-sm font-semibold text-gray-700">
                             Email{" "}
@@ -531,10 +570,9 @@ export default function AgroSignalDashboard() {
                           />
                         </div>
                       </div>
-
-                      {error && (
+                      {formError && (
                         <div className="bg-red-50 border-l-4 border-red-400 rounded p-3 text-sm text-red-800">
-                          {error}
+                          {formError}
                         </div>
                       )}
                       {successMsg && (
@@ -542,13 +580,12 @@ export default function AgroSignalDashboard() {
                           {successMsg}
                         </div>
                       )}
-
                       <Button
                         type="submit"
                         disabled={submitting}
                         className="w-full bg-emerald-600 hover:bg-emerald-700 text-white"
                       >
-                        {submitting ? "Registering..." : "Register Farmer"}
+                        {submitting ? "Registering…" : "Register Farmer"}
                       </Button>
                     </form>
                   </DialogContent>
@@ -556,84 +593,81 @@ export default function AgroSignalDashboard() {
               </div>
             </div>
 
-            {/* Error banner */}
-            {error && !dialogOpen && (
-              <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-800 text-sm">
-                {error}
+            {fetchError && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-800 text-sm flex items-center justify-between">
+                <span>{fetchError}</span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={fetchFarmers}
+                  className="text-red-700 border-red-300 hover:bg-red-100 bg-transparent ml-4"
+                >
+                  <RefreshCw className="w-3 h-3 mr-1" />
+                  Retry
+                </Button>
               </div>
             )}
 
-            {/* Stats cards */}
+            {/* Stats */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <Card className="bg-gradient-to-br from-emerald-500 to-emerald-600 text-white shadow-lg border-0">
-                <CardContent className="p-5">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-emerald-100 text-xs font-medium uppercase tracking-wide">
-                        Total Farmers
-                      </p>
-                      <p className="text-4xl font-bold mt-1">
-                        {farmers.length}
-                      </p>
-                    </div>
-                    <Users className="w-10 h-10 text-emerald-200" />
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="bg-gradient-to-br from-teal-500 to-teal-600 text-white shadow-lg border-0">
-                <CardContent className="p-5">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-teal-100 text-xs font-medium uppercase tracking-wide">
-                        Active
-                      </p>
-                      <p className="text-4xl font-bold mt-1">{activeCount}</p>
-                    </div>
-                    <Globe className="w-10 h-10 text-teal-200" />
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="bg-gradient-to-br from-cyan-500 to-cyan-600 text-white shadow-lg border-0">
-                <CardContent className="p-5">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-cyan-100 text-xs font-medium uppercase tracking-wide">
-                        Districts
-                      </p>
-                      <p className="text-4xl font-bold mt-1">{districts}</p>
-                    </div>
-                    <MapPin className="w-10 h-10 text-cyan-200" />
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="bg-gradient-to-br from-green-500 to-green-600 text-white shadow-lg border-0">
-                <CardContent className="p-5">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-green-100 text-xs font-medium uppercase tracking-wide">
-                        Top Crop
-                      </p>
-                      <p className="text-xl font-bold mt-1 truncate">
-                        {topCrop ? topCrop[0] : "—"}
-                      </p>
-                      {topCrop && (
-                        <p className="text-green-200 text-xs">
-                          {topCrop[1]} farmers
+              {[
+                {
+                  label: "Total Farmers",
+                  value: farmers.length,
+                  icon: Users,
+                  colors: "from-emerald-500 to-emerald-600",
+                  text: "text-emerald-100",
+                  icon_c: "text-emerald-200",
+                },
+                {
+                  label: "Active",
+                  value: activeCount,
+                  icon: Globe,
+                  colors: "from-teal-500 to-teal-600",
+                  text: "text-teal-100",
+                  icon_c: "text-teal-200",
+                },
+                {
+                  label: "Districts",
+                  value: districts,
+                  icon: MapPin,
+                  colors: "from-cyan-500 to-cyan-600",
+                  text: "text-cyan-100",
+                  icon_c: "text-cyan-200",
+                },
+                {
+                  label: "Mapped",
+                  value: mappedCount,
+                  icon: Wheat,
+                  colors: "from-green-500 to-green-600",
+                  text: "text-green-100",
+                  icon_c: "text-green-200",
+                },
+              ].map(({ label, value, icon: Icon, colors, text, icon_c }) => (
+                <Card
+                  key={label}
+                  className={`bg-gradient-to-br ${colors} text-white shadow-lg border-0`}
+                >
+                  <CardContent className="p-5">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p
+                          className={`${text} text-xs font-medium uppercase tracking-wide`}
+                        >
+                          {label}
                         </p>
-                      )}
+                        <p className="text-4xl font-bold mt-1">{value}</p>
+                      </div>
+                      <Icon className={`w-10 h-10 ${icon_c}`} />
                     </div>
-                    <Wheat className="w-10 h-10 text-green-200" />
-                  </div>
-                </CardContent>
-              </Card>
+                  </CardContent>
+                </Card>
+              ))}
             </div>
 
-            {/* Map + Table row */}
+            {/* Map + Crop breakdown */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Leaflet Map */}
+              {/* MAP — callback ref guarantees init after DOM mount */}
               <Card className="shadow-lg border-emerald-100 overflow-hidden">
                 <CardHeader className="pb-3">
                   <CardTitle className="text-emerald-800 flex items-center gap-2 text-base">
@@ -643,20 +677,19 @@ export default function AgroSignalDashboard() {
                       variant="secondary"
                       className="ml-auto bg-emerald-100 text-emerald-700"
                     >
-                      {farmers.filter((f) => f.gps_lat && f.gps_lng).length}{" "}
-                      mapped
+                      {mappedCount} mapped
                     </Badge>
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="p-0">
                   <div
-                    ref={mapRef}
-                    style={{ height: "420px", width: "100%", zIndex: 0 }}
+                    ref={mapCallbackRef}
+                    style={{ height: 420, width: "100%" }}
                   />
                 </CardContent>
               </Card>
 
-              {/* Crop breakdown */}
+              {/* Crop chart */}
               <Card className="shadow-lg border-emerald-100">
                 <CardHeader className="pb-3">
                   <CardTitle className="text-emerald-800 flex items-center gap-2 text-base">
@@ -680,7 +713,7 @@ export default function AgroSignalDashboard() {
                           return (
                             <div key={crop}>
                               <div className="flex justify-between text-sm mb-1">
-                                <span className="font-medium text-gray-700">
+                                <span className="font-medium text-gray-700 capitalize">
                                   {crop}
                                 </span>
                                 <span className="text-gray-500">
@@ -716,15 +749,12 @@ export default function AgroSignalDashboard() {
               <CardContent>
                 {loading ? (
                   <div className="text-center py-12 text-emerald-600">
-                    Loading farmers...
+                    Loading farmers…
                   </div>
                 ) : farmers.length === 0 ? (
                   <div className="text-center py-12 text-gray-400">
                     <Sprout className="w-10 h-10 mx-auto mb-3 opacity-30" />
                     <p>No farmers registered yet.</p>
-                    <p className="text-sm mt-1">
-                      Use the button above to register the first farmer.
-                    </p>
                   </div>
                 ) : (
                   <div className="rounded-lg border border-emerald-100 overflow-hidden">
@@ -747,7 +777,7 @@ export default function AgroSignalDashboard() {
                             Status
                           </TableHead>
                           <TableHead className="text-emerald-800 font-semibold">
-                            Location
+                            Coordinates
                           </TableHead>
                         </TableRow>
                       </TableHeader>
@@ -757,25 +787,28 @@ export default function AgroSignalDashboard() {
                             key={farmer.id}
                             className="hover:bg-emerald-50/50 cursor-pointer"
                             onClick={() => {
-                              setSelectedFarmer(farmer);
                               if (
-                                mapInstanceRef.current &&
-                                farmer.gps_lat &&
-                                farmer.gps_lng
-                              ) {
-                                mapInstanceRef.current.setView(
-                                  [
-                                    parseFloat(farmer.gps_lat),
-                                    parseFloat(farmer.gps_lng),
-                                  ],
-                                  12,
-                                );
-                                // Scroll to map
-                                mapRef.current?.scrollIntoView({
-                                  behavior: "smooth",
-                                  block: "center",
-                                });
-                              }
+                                !mapInstanceRef.current ||
+                                !farmer.gps_lat ||
+                                !farmer.gps_lng
+                              )
+                                return;
+                              const lat = parseFloat(farmer.gps_lat);
+                              const lng = parseFloat(farmer.gps_lng);
+                              if (isNaN(lat) || isNaN(lng)) return;
+                              mapInstanceRef.current.setView([lat, lng], 13);
+                              markersRef.current.forEach((m) => {
+                                const pos = m.getLatLng();
+                                if (
+                                  Math.abs(pos.lat - lat) < 0.005 &&
+                                  Math.abs(pos.lng - lng) < 0.005
+                                )
+                                  m.openPopup();
+                              });
+                              mapContainerRef.current?.scrollIntoView({
+                                behavior: "smooth",
+                                block: "center",
+                              });
                             }}
                           >
                             <TableCell className="font-medium text-gray-900">
@@ -806,15 +839,15 @@ export default function AgroSignalDashboard() {
                                 {farmer.status}
                               </Badge>
                             </TableCell>
-                            <TableCell className="text-xs text-gray-500">
+                            <TableCell className="text-xs">
                               {farmer.gps_lat && farmer.gps_lng ? (
-                                <span className="flex items-center gap-1 text-emerald-600">
-                                  <MapPin className="w-3 h-3" />
+                                <span className="flex items-center gap-1 text-emerald-600 font-mono">
+                                  <MapPin className="w-3 h-3 flex-shrink-0" />
                                   {parseFloat(farmer.gps_lat).toFixed(4)},{" "}
                                   {parseFloat(farmer.gps_lng).toFixed(4)}
                                 </span>
                               ) : (
-                                <span className="text-gray-300">—</span>
+                                <span className="text-gray-300">No GPS</span>
                               )}
                             </TableCell>
                           </TableRow>
