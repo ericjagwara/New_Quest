@@ -36,8 +36,7 @@ import {
 } from "lucide-react";
 
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_AGROSIGNAL_URL ||
-  "https://agrosignal-dugg.onrender.com";
+  process.env.NEXT_PUBLIC_AGROSIGNAL_URL || "https://chris.fastapicloud.dev";
 
 interface Farmer {
   id: string;
