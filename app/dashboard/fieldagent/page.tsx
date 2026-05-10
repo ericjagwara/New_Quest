@@ -20,6 +20,11 @@ import {
   Navigation,
   RefreshCw,
   ChevronRight,
+  CloudRain,
+  X,
+  Send,
+  FileText,
+  Loader2,
 } from "lucide-react";
 
 const API =
@@ -72,6 +77,32 @@ interface Geofence {
   points?: BoundaryPoint[];
 }
 
+// ─── Weather Event Types ───────────────────────────────────────────────────────
+interface WeatherEventPayload {
+  policy_id: string;
+  event_type: string;
+  country: string;
+  district: string;
+  severity: "low" | "medium" | "high" | "extreme";
+  description: string;
+}
+
+interface WeatherEventResponse {
+  id: string;
+  policy_id: string;
+  event_type: string;
+  detection_method: string;
+  country: string;
+  district: string;
+  gps_lat: string;
+  gps_lng: string;
+  detected_at: string;
+  severity: string;
+  status: string;
+  submitting_agent_id: string;
+  created_at: string;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function getToken() {
   try {
@@ -102,6 +133,45 @@ const STATUS_COLOR: Record<string, string> = {
   flagged: "#d97706",
 };
 
+const EVENT_TYPES = [
+  "drought",
+  "flood",
+  "hail",
+  "frost",
+  "excessive_rain",
+  "wind_damage",
+  "pest_outbreak",
+  "disease_outbreak",
+  "other",
+];
+
+const SEVERITY_OPTIONS: {
+  value: WeatherEventPayload["severity"];
+  label: string;
+  color: string;
+}[] = [
+  {
+    value: "low",
+    label: "Low",
+    color: "bg-green-100 text-green-800 border-green-300",
+  },
+  {
+    value: "medium",
+    label: "Medium",
+    color: "bg-yellow-100 text-yellow-800 border-yellow-300",
+  },
+  {
+    value: "high",
+    label: "High",
+    color: "bg-orange-100 text-orange-800 border-orange-300",
+  },
+  {
+    value: "extreme",
+    label: "Extreme",
+    color: "bg-red-100 text-red-800 border-red-300",
+  },
+];
+
 // Guest fallback — used when no authUser is in localStorage
 const GUEST_USER: SessionUser = {
   id: "guest",
@@ -109,6 +179,340 @@ const GUEST_USER: SessionUser = {
   username: "Field Agent",
   role: "fieldworker",
 };
+
+// ─── Weather Event Modal ──────────────────────────────────────────────────────
+function WeatherEventModal({
+  onClose,
+  onSuccess,
+  prefillDistrict,
+  prefillCountry,
+}: {
+  onClose: () => void;
+  onSuccess: (event: WeatherEventResponse) => void;
+  prefillDistrict?: string;
+  prefillCountry?: string;
+}) {
+  const [form, setForm] = useState<WeatherEventPayload>({
+    policy_id: "",
+    event_type: "",
+    country: prefillCountry || "",
+    district: prefillDistrict || "",
+    severity: "medium",
+    description: "",
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [submitted, setSubmitted] = useState<WeatherEventResponse | null>(null);
+
+  const set = (k: keyof WeatherEventPayload, v: string) =>
+    setForm((prev) => ({ ...prev, [k]: v }));
+
+  const handleSubmit = async () => {
+    if (!form.policy_id.trim()) {
+      setError("Policy ID is required.");
+      return;
+    }
+    if (!form.event_type) {
+      setError("Event type is required.");
+      return;
+    }
+    if (!form.country.trim()) {
+      setError("Country is required.");
+      return;
+    }
+    if (!form.district.trim()) {
+      setError("District is required.");
+      return;
+    }
+    if (!form.description.trim()) {
+      setError("Description is required.");
+      return;
+    }
+    setError(null);
+    setBusy(true);
+    try {
+      const res = await fetch(`${API}/events`, {
+        method: "POST",
+        headers: authHeaders(getToken()),
+        body: JSON.stringify(form),
+      });
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        throw new Error(
+          e.detail
+            ? Array.isArray(e.detail)
+              ? e.detail.map((d: any) => d.msg).join(", ")
+              : e.detail
+            : `Submission failed (${res.status})`,
+        );
+      }
+      const data: WeatherEventResponse = await res.json();
+      setSubmitted(data);
+      onSuccess(data);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    /* Backdrop */
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: "rgba(0,0,0,0.45)", backdropFilter: "blur(3px)" }}
+    >
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden"
+        style={{ maxHeight: "90vh", display: "flex", flexDirection: "column" }}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-emerald-700 to-teal-600">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center">
+              <CloudRain className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h2 className="text-white font-bold text-base leading-tight">
+                Submit Weather Event
+              </h2>
+              <p className="text-emerald-100 text-xs">
+                Manually observed field report
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors"
+          >
+            <X className="w-4 h-4 text-white" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="overflow-y-auto flex-1 px-6 py-5 space-y-4">
+          {submitted ? (
+            /* Success state */
+            <div className="text-center py-6 space-y-4">
+              <div className="w-16 h-16 rounded-full bg-emerald-100 flex items-center justify-center mx-auto">
+                <CheckCircle className="w-9 h-9 text-emerald-600" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-emerald-800">
+                  Event Submitted!
+                </h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  The event is now <strong>under_verification</strong>. An
+                  insurer or platform admin will review it before any claim is
+                  created.
+                </p>
+              </div>
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-left text-sm space-y-1.5">
+                <InfoRow
+                  label="Event ID"
+                  value={submitted.id.slice(0, 18) + "…"}
+                  mono
+                />
+                <InfoRow label="Type" value={submitted.event_type} />
+                <InfoRow label="Severity" value={submitted.severity} />
+                <InfoRow label="District" value={submitted.district} />
+                <InfoRow label="Status" value={submitted.status} />
+                <InfoRow
+                  label="Detected at"
+                  value={new Date(submitted.detected_at).toLocaleString()}
+                />
+                {submitted.gps_lat && (
+                  <InfoRow
+                    label="Agent GPS"
+                    value={`${parseFloat(submitted.gps_lat).toFixed(5)}, ${parseFloat(submitted.gps_lng).toFixed(5)}`}
+                    mono
+                  />
+                )}
+              </div>
+              <Button
+                onClick={onClose}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white"
+              >
+                Done
+              </Button>
+            </div>
+          ) : (
+            <>
+              {/* Info note */}
+              <div className="bg-sky-50 border border-sky-200 rounded-lg px-3 py-2.5 text-xs text-sky-800 flex gap-2 items-start">
+                <span className="mt-0.5 text-sky-500 flex-shrink-0">ℹ</span>
+                <span>
+                  Your GPS is captured automatically from your registered device
+                  — no location entry needed. This event will be placed under{" "}
+                  <strong>under_verification</strong> status until an insurer
+                  reviews it.
+                </span>
+              </div>
+
+              {/* Policy ID */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                  Policy ID <span className="text-red-500">*</span>
+                </label>
+                <Input
+                  value={form.policy_id}
+                  onChange={(e) => set("policy_id", e.target.value)}
+                  placeholder="e.g. 3fa85f64-5717-4562-b3fc-…"
+                  className="h-9 text-sm font-mono border-gray-200 focus:border-emerald-400"
+                />
+              </div>
+
+              {/* Event Type */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                  Event Type <span className="text-red-500">*</span>
+                </label>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {EVENT_TYPES.map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => set("event_type", t)}
+                      className={`text-xs px-2 py-2 rounded-lg border capitalize transition-colors font-medium ${
+                        form.event_type === t
+                          ? "bg-emerald-600 text-white border-emerald-600"
+                          : "bg-white text-gray-600 border-gray-200 hover:border-emerald-300 hover:bg-emerald-50"
+                      }`}
+                    >
+                      {t.replace(/_/g, " ")}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Severity */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                  Severity <span className="text-red-500">*</span>
+                </label>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {SEVERITY_OPTIONS.map((s) => (
+                    <button
+                      key={s.value}
+                      onClick={() => set("severity", s.value)}
+                      className={`text-xs px-2 py-2 rounded-lg border font-semibold transition-all ${
+                        form.severity === s.value
+                          ? s.color +
+                            " border-2 ring-2 ring-offset-1 ring-current"
+                          : "bg-white text-gray-500 border-gray-200 hover:border-gray-300"
+                      }`}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Country + District */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                    Country <span className="text-red-500">*</span>
+                  </label>
+                  <Input
+                    value={form.country}
+                    onChange={(e) => set("country", e.target.value)}
+                    placeholder="e.g. UG"
+                    maxLength={2}
+                    className="h-9 text-sm uppercase border-gray-200 focus:border-emerald-400"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                    District <span className="text-red-500">*</span>
+                  </label>
+                  <Input
+                    value={form.district}
+                    onChange={(e) => set("district", e.target.value)}
+                    placeholder="e.g. Kampala"
+                    className="h-9 text-sm border-gray-200 focus:border-emerald-400"
+                  />
+                </div>
+              </div>
+
+              {/* Description */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                  Description <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  value={form.description}
+                  onChange={(e) => set("description", e.target.value)}
+                  placeholder="Describe what you observed in the field — crop damage visible, water levels, affected area estimate…"
+                  rows={3}
+                  className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-200 transition-colors"
+                />
+              </div>
+
+              {/* Error */}
+              {error && (
+                <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5 text-xs text-red-800">
+                  <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                  {error}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Footer */}
+        {!submitted && (
+          <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex gap-3">
+            <Button
+              variant="outline"
+              onClick={onClose}
+              className="flex-1 border-gray-200 text-gray-600 hover:bg-gray-100"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSubmit}
+              disabled={busy}
+              className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+            >
+              {busy ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Submitting…
+                </>
+              ) : (
+                <>
+                  <Send className="w-4 h-4 mr-2" />
+                  Submit Event
+                </>
+              )}
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function InfoRow({
+  label,
+  value,
+  mono,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}) {
+  return (
+    <div className="flex justify-between gap-4">
+      <span className="text-gray-500 flex-shrink-0">{label}</span>
+      <span
+        className={`font-medium text-gray-800 text-right ${mono ? "font-mono text-xs" : ""}`}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
 
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function FieldAgentDashboard() {
@@ -125,24 +529,27 @@ export default function FieldAgentDashboard() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [lastProximity, setLP] = useState<any>(null);
+  // ── Weather event state ────────────────────────────────────────────────────
+  const [showEventModal, setShowEventModal] = useState(false);
+  const [recentEvents, setRecentEvents] = useState<WeatherEventResponse[]>([]);
+
   const mapDivRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
   const markersRef = useRef<any[]>([]);
   const polygonRef = useRef<any>(null);
   const leafletRef = useRef<any>(null);
 
-  // ── Auth — no redirect; guests are welcome, logged-in users load their session ──
+  // ── Auth ───────────────────────────────────────────────────────────────────
   useEffect(() => {
     const raw = localStorage.getItem("authUser");
-    if (!raw) return; // stay as GUEST_USER, no redirect
+    if (!raw) return;
     try {
       const u = JSON.parse(raw);
-      // Skip expiry redirect — field agent page is public
       if (u.expiresAt && Date.now() > u.expiresAt) {
         localStorage.removeItem("authUser");
-        return; // stay as guest, don't redirect
+        return;
       }
-      setUser(u); // use logged-in session if available
+      setUser(u);
     } catch {
       // stay as guest
     }
@@ -160,7 +567,7 @@ export default function FieldAgentDashboard() {
         setFarmers(Array.isArray(d) ? d : (d.items ?? []));
       } catch (_) {}
     })();
-  }, []); // ← no longer depends on user; loads immediately on mount
+  }, []);
 
   // ── Leaflet — callback ref ─────────────────────────────────────────────────
   const mapCallbackRef = useCallback((node: HTMLDivElement | null) => {
@@ -446,6 +853,12 @@ export default function FieldAgentDashboard() {
     }
   };
 
+  // ── Weather event callback ─────────────────────────────────────────────────
+  const handleEventSuccess = (event: WeatherEventResponse) => {
+    setRecentEvents((prev) => [event, ...prev]);
+    flash(`Weather event submitted — status: ${event.status}`);
+  };
+
   // ── Derived ────────────────────────────────────────────────────────────────
   const filtered = farmers.filter(
     (f) =>
@@ -474,14 +887,25 @@ export default function FieldAgentDashboard() {
               <span>/</span>
               <span className="font-medium">Farm Boundary Walk</span>
             </div>
-            <div>
-              <h1 className="text-3xl font-bold text-emerald-800">
-                Farm Boundary Walk
-              </h1>
-              <p className="text-emerald-600 text-sm mt-1">
-                Select a farmer, walk the boundary, and capture GPS points to
-                build a geofence polygon.
-              </p>
+
+            {/* Title row — now includes Submit Event button */}
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div>
+                <h1 className="text-3xl font-bold text-emerald-800">
+                  Farm Boundary Walk
+                </h1>
+                <p className="text-emerald-600 text-sm mt-1">
+                  Select a farmer, walk the boundary, and capture GPS points to
+                  build a geofence polygon.
+                </p>
+              </div>
+              <Button
+                onClick={() => setShowEventModal(true)}
+                className="flex items-center gap-2 bg-white border-2 border-emerald-500 text-emerald-700 hover:bg-emerald-600 hover:text-white hover:border-emerald-600 transition-all shadow-sm font-semibold"
+              >
+                <CloudRain className="w-4 h-4" />
+                Submit Weather Event
+              </Button>
             </div>
 
             {/* Flash */}
@@ -577,6 +1001,15 @@ export default function FieldAgentDashboard() {
                           {selectedFarmer.primary_crop}
                         </Badge>
                       </div>
+
+                      {/* Quick Submit Event for this farmer's district */}
+                      <button
+                        onClick={() => setShowEventModal(true)}
+                        className="w-full flex items-center gap-2 text-xs text-sky-700 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg px-3 py-2 transition-colors font-medium"
+                      >
+                        <CloudRain className="w-3.5 h-3.5 flex-shrink-0" />
+                        Report a weather event in {selectedFarmer.district}
+                      </button>
 
                       <div className="flex items-center gap-2 text-sm">
                         <div
@@ -783,6 +1216,59 @@ export default function FieldAgentDashboard() {
                     </CardContent>
                   </Card>
                 )}
+
+                {/* ── Recent submitted events (session) ──────────────────── */}
+                {recentEvents.length > 0 && (
+                  <Card className="shadow-md border-sky-100">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sky-800 text-base flex items-center gap-2">
+                        <FileText className="w-4 h-4" />
+                        Submitted Events
+                        <Badge className="ml-auto bg-sky-100 text-sky-700 text-xs">
+                          {recentEvents.length}
+                        </Badge>
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-2">
+                      {recentEvents.map((ev) => (
+                        <div
+                          key={ev.id}
+                          className="bg-sky-50 border border-sky-100 rounded-lg p-3 text-xs space-y-1"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-semibold text-sky-800 capitalize">
+                              {ev.event_type.replace(/_/g, " ")}
+                            </span>
+                            <Badge
+                              className={`text-xs ${
+                                ev.severity === "extreme"
+                                  ? "bg-red-100 text-red-800"
+                                  : ev.severity === "high"
+                                    ? "bg-orange-100 text-orange-800"
+                                    : ev.severity === "medium"
+                                      ? "bg-yellow-100 text-yellow-800"
+                                      : "bg-green-100 text-green-800"
+                              }`}
+                            >
+                              {ev.severity}
+                            </Badge>
+                          </div>
+                          <p className="text-sky-700">
+                            {ev.district} · {ev.country}
+                          </p>
+                          <div className="flex items-center justify-between">
+                            <Badge className="bg-amber-100 text-amber-800 text-xs">
+                              {ev.status}
+                            </Badge>
+                            <span className="text-gray-400">
+                              {new Date(ev.created_at).toLocaleTimeString()}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </CardContent>
+                  </Card>
+                )}
               </div>
 
               {/* ─── RIGHT: MAP + TABLE ─── */}
@@ -816,6 +1302,13 @@ export default function FieldAgentDashboard() {
                     <p className="text-sm mt-1">
                       Choose from the list on the left to start a boundary walk
                     </p>
+                    <button
+                      onClick={() => setShowEventModal(true)}
+                      className="mt-6 flex items-center gap-2 text-sm text-emerald-600 border border-emerald-300 hover:bg-emerald-50 rounded-lg px-4 py-2 transition-colors font-medium"
+                    >
+                      <CloudRain className="w-4 h-4" />
+                      Or submit a weather event observation
+                    </button>
                   </div>
                 )}
 
@@ -905,6 +1398,19 @@ export default function FieldAgentDashboard() {
           </div>
         </main>
       </div>
+
+      {/* ── Weather Event Modal ─────────────────────────────────────────────── */}
+      {showEventModal && (
+        <WeatherEventModal
+          onClose={() => setShowEventModal(false)}
+          onSuccess={(ev) => {
+            handleEventSuccess(ev);
+            setShowEventModal(false);
+          }}
+          prefillDistrict={selectedFarmer?.district}
+          prefillCountry={selectedFarmer?.country}
+        />
+      )}
     </div>
   );
 }
