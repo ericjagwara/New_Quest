@@ -1,8 +1,8 @@
-"use client"
+"use client";
 
-import { useState, useEffect } from "react"
-import { usePathname } from "next/navigation"
-import { Button } from "@/components/ui/button"
+import { useState, useEffect } from "react";
+import { usePathname } from "next/navigation";
+import { Button } from "@/components/ui/button";
 import {
   LayoutDashboard,
   BarChart3,
@@ -11,22 +11,22 @@ import {
   GitPullRequest as FileRequest,
   School,
   Send,
-} from "lucide-react"
-import Image from "next/image"
-import { useSession } from "@/hooks/use-session"
+} from "lucide-react";
+import Image from "next/image";
+import { useSession } from "@/hooks/use-session";
 
 interface DashboardSidebarProps {
   user: {
-    username: string
-    role: string
-    school?: string // Add school property
-  }
+    username: string;
+    role: string;
+    school?: string; // Add school property
+  };
 }
 
 export function DashboardSidebar({ user }: DashboardSidebarProps) {
-  const pathname = usePathname()
-  const [activeItem, setActiveItem] = useState("Dashboard")
-  const { logout } = useSession()
+  const pathname = usePathname();
+  const [activeItem, setActiveItem] = useState("Dashboard");
+  const { logout } = useSession();
 
   // Define menu items based on user role
   const menuItems = [
@@ -34,7 +34,7 @@ export function DashboardSidebar({ user }: DashboardSidebarProps) {
       name: "Dashboard",
       icon: LayoutDashboard,
       href: "/dashboard",
-      roles: ["superadmin", "manager", "fieldworker", "schooladmin"],
+      roles: ["Platform Admin", "Insurer", "Field Agent", "Farmer"],
     },
     {
       name: "Attendance Analysis",
@@ -46,7 +46,7 @@ export function DashboardSidebar({ user }: DashboardSidebarProps) {
       name: "School Dashboard",
       icon: School,
       href: "/dashboard/school",
-      roles: ["schooladmin"],
+      roles: ["Platform Admin"],
     },
     {
       name: "Hygiene Quest Sales",
@@ -63,32 +63,36 @@ export function DashboardSidebar({ user }: DashboardSidebarProps) {
     {
       name: "My Requests",
       icon: Send,
-      href: "/dashboard/my-requests",
-      roles: ["fieldworker"],
+      href: "/dashboard/fieldagent",
+      roles: ["Filed Agent"],
     },
-  ]
+  ];
 
   // Filter menu items based on user role
-  const filteredMenuItems = menuItems.filter((item) => item.roles.includes(user.role))
+  const filteredMenuItems = menuItems.filter((item) =>
+    item.roles.includes(user.role),
+  );
 
   useEffect(() => {
-    const currentItem = filteredMenuItems.find((item) => item.href === pathname)
+    const currentItem = filteredMenuItems.find(
+      (item) => item.href === pathname,
+    );
     if (currentItem) {
-      setActiveItem(currentItem.name)
+      setActiveItem(currentItem.name);
     }
-  }, [pathname, filteredMenuItems])
+  }, [pathname, filteredMenuItems]);
 
   const handleLogout = () => {
     // Clear export token when logging out
-    localStorage.removeItem("export_token")
-    localStorage.removeItem("export_token_timestamp")
-    logout()
-  }
+    localStorage.removeItem("export_token");
+    localStorage.removeItem("export_token_timestamp");
+    logout();
+  };
 
   const handleNavigation = (item: any) => {
-    setActiveItem(item.name)
-    window.location.href = item.href
-  }
+    setActiveItem(item.name);
+    window.location.href = item.href;
+  };
 
   return (
     <div className="w-64 bg-gradient-to-b from-emerald-800 to-emerald-900 text-white flex flex-col shadow-xl">
@@ -105,9 +109,13 @@ export function DashboardSidebar({ user }: DashboardSidebarProps) {
             />
           </div>
           <div>
-            <h2 className="text-sm font-semibold text-emerald-100">Hygiene Quest</h2>
+            <h2 className="text-sm font-semibold text-emerald-100">
+              Agro Signal Dashboard
+            </h2>
             {user.role === "schooladmin" && user.school && (
-              <p className="text-xs text-emerald-300 mt-1 truncate max-w-[150px]">{user.school}</p>
+              <p className="text-xs text-emerald-300 mt-1 truncate max-w-[150px]">
+                {user.school}
+              </p>
             )}
           </div>
         </div>
@@ -116,7 +124,7 @@ export function DashboardSidebar({ user }: DashboardSidebarProps) {
       {/* Navigation Menu */}
       <nav className="flex-1 px-4 py-6 space-y-2">
         {filteredMenuItems.map((item) => {
-          const Icon = item.icon
+          const Icon = item.icon;
           return (
             <button
               key={item.name}
@@ -130,7 +138,7 @@ export function DashboardSidebar({ user }: DashboardSidebarProps) {
               <Icon className="w-5 h-5" />
               <span className="text-sm font-medium">{item.name}</span>
             </button>
-          )
+          );
         })}
       </nav>
 
@@ -138,16 +146,14 @@ export function DashboardSidebar({ user }: DashboardSidebarProps) {
       <div className="p-4 border-t border-emerald-700">
         <div className="mb-4">
           <p className="text-sm text-emerald-300">Logged in as:</p>
-          <p className="text-sm font-semibold capitalize text-emerald-100">{user.username}</p>
-          <p className="text-xs text-emerald-400 capitalize">{user.role}</p>
-          {user.role === "schooladmin" && user.school && (
-            <p className="text-xs text-emerald-300 mt-1">School: {user.school}</p>
-          )}
+          <p className="text-sm font-semibold capitalize text-emerald-100">
+            {user.username}
+          </p>
         </div>
 
         {/* Program Badge */}
         <div className="mb-4 p-3 bg-gradient-to-r from-emerald-600 to-teal-600 rounded-lg text-center shadow-lg">
-          <p className="text-xs font-bold text-white">HYGIENE QUEST PROGRAM</p>
+          <p className="text-xs font-bold text-white">Agro Signal </p>
         </div>
 
         <Button
@@ -161,5 +167,5 @@ export function DashboardSidebar({ user }: DashboardSidebarProps) {
         </Button>
       </div>
     </div>
-  )
+  );
 }

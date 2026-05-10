@@ -39,15 +39,19 @@ import {
   X,
   CheckCircle,
   TrendingDown,
+  Loader2,
+  Banknote,
+  Users,
+  ClipboardCheck,
+  Wifi,
+  ArrowRight,
 } from "lucide-react";
 
 const API = "https://chris.fastapicloud.dev";
+const DROUGHT_THRESHOLD = 0.3;
+const FLOOD_THRESHOLD = 0.1;
 
-// ─── Real thresholds (values are 0–1 scale) ───────────────────────────────────
-const DROUGHT_THRESHOLD = 0.3; // drought_index_display ≥ 0.3 → alert
-const FLOOD_THRESHOLD = 0.1; // flood_risk_score_display ≥ 0.1 → alert
-
-// ─── Types ────────────────────────────────────────────────────────────────────
+// Types
 interface SessionUser {
   id: string;
   name: string;
@@ -57,13 +61,11 @@ interface SessionUser {
   partner_id?: string;
   expiresAt?: number;
 }
-
 interface InsurerProfile {
   id: string;
   licence_number: string;
   regulator_name: string;
   review_mode: string;
-  manual_review_window_hours: number;
   partner: {
     id: string;
     name: string;
@@ -73,20 +75,19 @@ interface InsurerProfile {
     primary_contact_email: string;
   };
 }
-
 interface Policy {
   id: string;
   name: string;
-  description: string;
+  description?: string;
   status: string;
-  coverage_amount_per_event: number;
-  premium_amount: number;
+  coverage_amount_display: number;
+  premium_amount_display: number;
   currency: string;
-  qod_drop_threshold_pct: number;
-  consecutive_readings_required: number;
-  payout_pct: number;
-  per_event_cap_amt: number;
-  per_season_cap_amt: number;
+  qod_drop_threshold_pct?: number;
+  consecutive_readings_required?: number;
+  payout_pct?: number;
+  per_event_cap_amt?: number;
+  per_season_cap_amt?: number;
   crops?: { crop_type: string }[];
   regions?: {
     country: string;
@@ -94,7 +95,6 @@ interface Policy {
     districts: { district_name: string }[];
   }[];
 }
-
 interface SignalReading {
   id: string;
   farmer_id: string;
@@ -103,22 +103,29 @@ interface SignalReading {
   is_anomalous: boolean;
   qod_value: number;
   drop_pct: number;
-  policy_id?: string;
   farmer_name?: string;
 }
-
 interface WeatherRecord {
   id: string;
   district: string;
   country: string;
   recorded_at: string;
   data_source: string;
-  rainfall_mm_display: number; // mm
-  drought_index_display: number; // 0–1 scale
-  flood_risk_score_display: number; // 0–1 scale
+  rainfall_mm_display: number;
+  drought_index_display: number;
+  flood_risk_score_display: number;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// Payout simulation step
+interface SimStep {
+  id: string;
+  label: string;
+  detail: string;
+  status: "pending" | "running" | "done" | "failed";
+  result?: string;
+}
+
+// Helpers
 function getToken() {
   try {
     return JSON.parse(localStorage.getItem("authUser") || "{}").access_token;
@@ -126,14 +133,12 @@ function getToken() {
     return undefined;
   }
 }
-
 function authH(token?: string) {
   return {
     "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
 }
-
 function fmt(n: number, currency = "UGX") {
   return new Intl.NumberFormat("en-UG", {
     style: "currency",
@@ -141,14 +146,11 @@ function fmt(n: number, currency = "UGX") {
     maximumFractionDigits: 0,
   }).format(n);
 }
-
-// Format 0–1 as percentage with colour class
 function pctColor(v: number, threshold: number) {
   if (v >= threshold) return "text-red-600 font-bold";
   if (v >= threshold * 0.6) return "text-amber-600 font-semibold";
   return "text-slate-600";
 }
-
 function pctBar(v: number, threshold: number) {
   const pct = Math.min(v * 100, 100);
   const color =
@@ -169,8 +171,8 @@ function pctBar(v: number, threshold: number) {
 const EMPTY_POLICY = {
   name: "",
   description: "",
-  coverage_amount_per_event: 50000,
-  premium_amount: 5000,
+  coverage_amount_display: 50000,
+  premium_amount_display: 5000,
   currency: "UGX",
   qod_drop_threshold_pct: 40,
   consecutive_readings_required: 3,
@@ -184,12 +186,404 @@ const EMPTY_POLICY = {
   country: "UG",
   region_name: "Central",
   districts: "Mukono, Wakiso",
-  insurer_id: "", // editable in form, pre-filled from session
+  insurer_id: "",
 };
 
 type Tab = "overview" | "policies" | "signals" | "weather";
 
-// ─── Component ────────────────────────────────────────────────────────────────
+// Payout Simulation Engine
+function PayoutSimulator({
+  item,
+  type,
+  policies,
+  onClose,
+}: {
+  item: SignalReading | WeatherRecord;
+  type: "signal" | "weather";
+  policies: Policy[];
+  onClose: () => void;
+}) {
+  const [steps, setSteps] = useState<SimStep[]>([]);
+  const [running, setRunning] = useState(false);
+  const [complete, setComplete] = useState(false);
+  const [totalPayout, setTotalPayout] = useState(0);
+  const [farmersCount, setFarmersCount] = useState(0);
+  const [currency, setCurrency] = useState("UGX");
+  const [txId, setTxId] = useState("");
+
+  // Pick a matching policy for the simulation
+  const matchedPolicy =
+    policies.find((p) => p.status === "active") ?? policies[0] ?? null;
+
+  const buildSteps = (): SimStep[] => {
+    const isWeather = type === "weather";
+    const w = item as WeatherRecord;
+    const s = item as SignalReading;
+
+    return [
+      {
+        id: "trigger",
+        label: "Event Trigger Received",
+        detail: isWeather
+          ? `${w.drought_index_display >= DROUGHT_THRESHOLD ? "Drought" : "Flood"} threshold breached in ${w.district}, ${w.country}`
+          : `QoD anomaly detected on ${s.msisdn} — drop of ${s.drop_pct?.toFixed(1)}%`,
+        status: "pending",
+      },
+      {
+        id: "policy",
+        label: "Policy Lookup & Validation",
+        detail: matchedPolicy
+          ? `Checking policy "${matchedPolicy.name}" — payout ${matchedPolicy.payout_pct}% of coverage`
+          : "Scanning active policies for matching coverage criteria",
+        status: "pending",
+      },
+      {
+        id: "eligibility",
+        label: "Farmer Eligibility Check",
+        detail:
+          "Cross-referencing enrolled farmers against geofenced plot boundaries in affected district",
+        status: "pending",
+      },
+      {
+        id: "corroboration",
+        label: "Data Corroboration",
+        detail: isWeather
+          ? "Cross-checking Open-Meteo readings with QoD signal data for independent confirmation"
+          : "Verifying signal anomaly against Open-Meteo drought/flood data for the farmer's district",
+        status: "pending",
+      },
+      {
+        id: "calculation",
+        label: "Payout Amount Calculation",
+        detail: `Applying payout formula: coverage × payout% × eligible farmers — capped at per-event limit`,
+        status: "pending",
+      },
+      {
+        id: "compliance",
+        label: "Compliance & Fraud Check",
+        detail:
+          "Running AML check, verifying no duplicate claim exists, confirming policy is not in dispute",
+        status: "pending",
+      },
+      {
+        id: "disbursement",
+        label: "Mobile Money Disbursement",
+        detail:
+          "Pushing payment via MTN MoMo / Airtel Money rails to registered farmer MSISDNs",
+        status: "pending",
+      },
+      {
+        id: "audit",
+        label: "Audit Trail Written",
+        detail:
+          "Immutable event log created — payout ID, timestamp, farmer IDs, amounts, and policy reference stored",
+        status: "pending",
+      },
+    ];
+  };
+
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  const updateStep = (id: string, patch: Partial<SimStep>) => {
+    setSteps((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+  };
+
+  const runSimulation = async () => {
+    const initial = buildSteps();
+    setSteps(initial);
+    setRunning(true);
+    setComplete(false);
+
+    const durations = [600, 900, 1200, 1000, 800, 1100, 1500, 700];
+    const farmers = Math.floor(Math.random() * 18) + 3;
+    const pol = matchedPolicy;
+    const cov = pol?.coverage_amount_display ?? 50000;
+    const pct = pol?.payout_pct ?? 100;
+    const cap = pol?.per_event_cap_amt ?? 50000;
+    const curr = pol?.currency ?? "UGX";
+    const perFarmer = Math.min((cov * pct) / 100, cap);
+    const total = Math.min(
+      perFarmer * farmers,
+      pol?.per_season_cap_amt ?? 150000,
+    );
+
+    const results = [
+      `Trigger logged at ${new Date().toLocaleTimeString()}`,
+      pol
+        ? `"${pol.name}" — active, QoD threshold ${pol.qod_drop_threshold_pct}%`
+        : "No matching policy found",
+      `${farmers} farmers enrolled in affected district`,
+      "✓ Corroborated — independent data sources agree",
+      `${fmt(perFarmer, curr)} per farmer × ${farmers} = ${fmt(total, curr)}`,
+      "✓ No flags — payout approved for processing",
+      `${farmers} payments queued — reference TXN-${Math.random().toString(36).slice(2, 10).toUpperCase()}`,
+      "Audit entry committed to ledger",
+    ];
+
+    for (let i = 0; i < initial.length; i++) {
+      updateStep(initial[i].id, { status: "running" });
+      await sleep(durations[i]);
+      // Simulate a compliance check that always passes for demo
+      updateStep(initial[i].id, { status: "done", result: results[i] });
+      if (i === 6) {
+        setTxId(`TXN-${Math.random().toString(36).slice(2, 10).toUpperCase()}`);
+        setFarmersCount(farmers);
+        setTotalPayout(total);
+        setCurrency(curr);
+      }
+    }
+
+    setRunning(false);
+    setComplete(true);
+  };
+
+  const stepIcon = (status: SimStep["status"], id: string) => {
+    if (status === "running")
+      return <Loader2 className="w-4 h-4 animate-spin text-blue-500" />;
+    if (status === "done")
+      return <CheckCircle className="w-4 h-4 text-emerald-500" />;
+    if (status === "failed") return <X className="w-4 h-4 text-red-500" />;
+    // pending — different icon per step
+    const icons: Record<string, any> = {
+      trigger: AlertTriangle,
+      policy: FileText,
+      eligibility: Users,
+      corroboration: CloudRain,
+      calculation: Banknote,
+      compliance: ClipboardCheck,
+      disbursement: Wifi,
+      audit: Shield,
+    };
+    const Icon = icons[id] ?? ArrowRight;
+    return <Icon className="w-4 h-4 text-slate-300" />;
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Alert summary */}
+      <div
+        className={`rounded-lg p-3 text-sm border ${type === "signal" ? "bg-red-50 border-red-100" : "bg-amber-50 border-amber-100"}`}
+      >
+        {type === "signal" ? (
+          <div className="space-y-1">
+            <p className="font-semibold text-slate-800">
+              QoD Anomaly — {(item as SignalReading).msisdn}
+            </p>
+            <p className="text-slate-600">
+              Drop:{" "}
+              <strong className="text-red-600">
+                {(item as SignalReading).drop_pct?.toFixed(1)}%
+              </strong>{" "}
+              · Recorded:{" "}
+              {new Date((item as SignalReading).recorded_at).toLocaleString()}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-1">
+            <p className="font-semibold text-slate-800">
+              {(item as WeatherRecord).district},{" "}
+              {(item as WeatherRecord).country}
+            </p>
+            <div className="flex items-center gap-4 text-xs text-slate-600">
+              <span>
+                Drought:{" "}
+                <strong>
+                  {(
+                    (item as WeatherRecord).drought_index_display * 100
+                  ).toFixed(1)}
+                  %
+                </strong>
+              </span>
+              <span>
+                Flood:{" "}
+                <strong>
+                  {(
+                    (item as WeatherRecord).flood_risk_score_display * 100
+                  ).toFixed(1)}
+                  %
+                </strong>
+              </span>
+              <span>
+                Rain:{" "}
+                <strong>
+                  {(item as WeatherRecord).rainfall_mm_display} mm
+                </strong>
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Matched policy chip */}
+      {matchedPolicy && (
+        <div className="flex items-center gap-2 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 text-xs">
+          <FileText className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />
+          <span className="text-blue-700 font-medium">
+            {matchedPolicy.name}
+          </span>
+          <span className="text-blue-400 ml-auto">
+            {fmt(matchedPolicy.coverage_amount_display, matchedPolicy.currency)}{" "}
+            coverage · {matchedPolicy.payout_pct}% payout
+          </span>
+        </div>
+      )}
+
+      {/* Run button */}
+      {steps.length === 0 && (
+        <Button
+          onClick={runSimulation}
+          className="w-full bg-emerald-600 hover:bg-emerald-700 text-white h-11"
+        >
+          <Zap className="w-4 h-4 mr-2" />
+          Run Payout Simulation
+        </Button>
+      )}
+
+      {/* Step-by-step progress */}
+      {steps.length > 0 && (
+        <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
+          {steps.map((step, i) => (
+            <div
+              key={step.id}
+              className={`flex items-start gap-3 rounded-lg px-3 py-2.5 transition-all duration-300 ${
+                step.status === "running"
+                  ? "bg-blue-50 border border-blue-200"
+                  : step.status === "done"
+                    ? "bg-emerald-50 border border-emerald-100"
+                    : step.status === "failed"
+                      ? "bg-red-50 border border-red-100"
+                      : "bg-slate-50 border border-slate-100 opacity-50"
+              }`}
+            >
+              <div className="flex-shrink-0 mt-0.5">
+                {stepIcon(step.status, step.id)}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p
+                  className={`text-sm font-medium ${
+                    step.status === "done"
+                      ? "text-emerald-800"
+                      : step.status === "running"
+                        ? "text-blue-800"
+                        : step.status === "failed"
+                          ? "text-red-800"
+                          : "text-slate-500"
+                  }`}
+                >
+                  {step.label}
+                </p>
+                {step.status !== "pending" && (
+                  <p className="text-xs text-slate-500 mt-0.5 truncate">
+                    {step.result ?? step.detail}
+                  </p>
+                )}
+              </div>
+              {step.status === "running" && (
+                <span className="text-xs text-blue-500 flex-shrink-0 mt-0.5 animate-pulse">
+                  processing…
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Running indicator */}
+      {running && (
+        <div className="flex items-center gap-2 text-sm text-slate-500 bg-slate-50 rounded-lg px-3 py-2">
+          <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
+          Simulation running — do not close this window
+        </div>
+      )}
+
+      {/* Success state */}
+      {complete && (
+        <div className="bg-emerald-50 border-2 border-emerald-200 rounded-xl p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <CheckCircle className="w-6 h-6 text-emerald-500" />
+            <p className="font-bold text-emerald-800 text-base">
+              Payout Simulation Complete
+            </p>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3 text-center">
+            <div className="bg-white rounded-lg p-2.5 border border-emerald-100">
+              <p className="text-xs text-slate-500 mb-0.5">Total Disbursed</p>
+              <p className="text-lg font-bold text-emerald-700">
+                {fmt(totalPayout, currency)}
+              </p>
+            </div>
+            <div className="bg-white rounded-lg p-2.5 border border-emerald-100">
+              <p className="text-xs text-slate-500 mb-0.5">Farmers Paid</p>
+              <p className="text-lg font-bold text-emerald-700">
+                {farmersCount}
+              </p>
+            </div>
+            <div className="bg-white rounded-lg p-2.5 border border-emerald-100">
+              <p className="text-xs text-slate-500 mb-0.5">Payout Method</p>
+              <p className="text-sm font-bold text-emerald-700">Mobile Money</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 bg-white rounded-lg px-3 py-2 border border-emerald-100">
+            <Shield className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+            <div>
+              <p className="text-xs text-slate-500">Transaction Reference</p>
+              <p className="text-sm font-mono font-bold text-slate-800">
+                {txId}
+              </p>
+            </div>
+            <div className="ml-auto text-right">
+              <p className="text-xs text-slate-500">Timestamp</p>
+              <p className="text-xs font-medium text-slate-700">
+                {new Date().toLocaleString()}
+              </p>
+            </div>
+          </div>
+
+          <p className="text-xs text-slate-500 text-center">
+            This is a simulation. In production, real payments would be
+            disbursed via MTN MoMo / Airtel Money.
+          </p>
+
+          <div className="flex gap-2">
+            <Button
+              onClick={runSimulation}
+              variant="outline"
+              size="sm"
+              className="flex-1 border-emerald-300 text-emerald-700 hover:bg-emerald-50 bg-white text-xs"
+            >
+              <RefreshCw className="w-3 h-3 mr-1.5" />
+              Run Again
+            </Button>
+            <Button
+              onClick={onClose}
+              size="sm"
+              className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs"
+            >
+              Close
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Dismiss if not started */}
+      {steps.length === 0 && (
+        <Button
+          onClick={onClose}
+          variant="outline"
+          size="sm"
+          className="w-full border-slate-200 text-slate-500 hover:bg-slate-50 bg-white text-xs"
+        >
+          <X className="w-3 h-3 mr-1.5" />
+          Cancel
+        </Button>
+      )}
+    </div>
+  );
+}
+
+// Main component
 export default function InsurerDashboard() {
   const router = useRouter();
   const [user, setUser] = useState<SessionUser | null>(null);
@@ -205,12 +599,12 @@ export default function InsurerDashboard() {
   const [form, setForm] = useState({ ...EMPTY_POLICY });
   const [expandedPolicy, setExp] = useState<string | null>(null);
 
-  const [alertOpen, setAlertOpen] = useState(false);
-  const [alertItem, setAlertItem] = useState<
-    SignalReading | WeatherRecord | null
-  >(null);
-  const [alertType, setAlertType] = useState<"signal" | "weather">("signal");
-  const [payoutDone, setPayoutDone] = useState(false);
+  // Payout sim dialog
+  const [simOpen, setSimOpen] = useState(false);
+  const [simItem, setSimItem] = useState<SignalReading | WeatherRecord | null>(
+    null,
+  );
+  const [simType, setSimType] = useState<"signal" | "weather">("signal");
 
   const [sigFilter, setSigFilter] = useState({
     farmer_id: "",
@@ -230,7 +624,7 @@ export default function InsurerDashboard() {
   const leafletRef = useRef<any>(null);
   const markersRef = useRef<any[]>([]);
 
-  // ── Auth ────────────────────────────────────────────────────────────────────
+  //  Auth
   useEffect(() => {
     const raw = localStorage.getItem("authUser");
     if (!raw) {
@@ -245,39 +639,37 @@ export default function InsurerDashboard() {
         return;
       }
       setUser(u);
-      // Pre-fill insurer_id in form from session
       setForm((f) => ({ ...f, insurer_id: u.partner_id ?? "" }));
     } catch {
       router.push("/");
     }
   }, [router]);
 
-  // ── Fetch insurer profile ───────────────────────────────────────────────────
   useEffect(() => {
     if (!user?.partner_id) return;
-    (async () => {
-      try {
-        const res = await fetch(`${API}/partners/insurers/${user.partner_id}`, {
-          headers: authH(getToken()),
-        });
-        if (res.ok) setInsurer(await res.json());
-      } catch (_) {}
-    })();
+    fetch(`${API}/partners/insurers/${user.partner_id}`, {
+      headers: authH(getToken()),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d) setInsurer(d);
+      })
+      .catch(() => {});
   }, [user]);
 
-  // ── Fetch policies ───────────────────────────────────────────────────────────
   const fetchPolicies = useCallback(async () => {
     try {
       const res = await fetch(`${API}/policies?page=1&per_page=50`, {
         headers: authH(getToken()),
       });
       if (!res.ok) return;
-      const d = await res.json();
-      setPolicies(Array.isArray(d) ? d : (d.items ?? []));
+      const data = await res.json();
+      // Handle both array response and paginated response
+      const policiesList = Array.isArray(data) ? data : (data.items ?? []);
+      setPolicies(policiesList);
     } catch (_) {}
   }, []);
 
-  // ── Fetch signal readings ────────────────────────────────────────────────────
   const fetchSignals = useCallback(async () => {
     const params = new URLSearchParams({ page: "1", per_page: "50" });
     if (sigFilter.farmer_id) params.set("farmer_id", sigFilter.farmer_id);
@@ -293,9 +685,8 @@ export default function InsurerDashboard() {
     } catch (_) {}
   }, [sigFilter]);
 
-  // ── Fetch weather (Open-Meteo) ───────────────────────────────────────────────
   const fetchWeather = useCallback(async () => {
-    const params = new URLSearchParams({ page: "1", per_page: "50" });
+    const params = new URLSearchParams({ page: "1", per_page: "100" });
     if (wxFilter.district) params.set("district", wxFilter.district);
     if (wxFilter.country) params.set("country", wxFilter.country);
     if (wxFilter.data_source) params.set("data_source", wxFilter.data_source);
@@ -319,7 +710,7 @@ export default function InsurerDashboard() {
     );
   }, [user, fetchPolicies, fetchSignals, fetchWeather]);
 
-  // ── Leaflet map ──────────────────────────────────────────────────────────────
+  // Leaflet
   const mapCallbackRef = useCallback((node: HTMLDivElement | null) => {
     if (!node || mapRef.current) return;
     mapDivRef.current = node;
@@ -358,14 +749,12 @@ export default function InsurerDashboard() {
     [],
   );
 
-  // ── Draw weather markers ─────────────────────────────────────────────────────
   useEffect(() => {
     const L = leafletRef.current;
     const map = mapRef.current;
-    if (!L || !map) return;
+    if (!L || !map || weather.length === 0) return;
     markersRef.current.forEach((m) => map.removeLayer(m));
     markersRef.current = [];
-
     const knownDistricts: Record<string, [number, number]> = {
       Kampala: [0.3476, 32.5825],
       Wakiso: [0.4, 32.45],
@@ -378,24 +767,16 @@ export default function InsurerDashboard() {
       Entebbe: [0.0512, 32.4633],
       Lira: [2.2499, 32.8998],
     };
-
-    // Group by district — show latest reading per district
-    const byDistrict: Record<string, WeatherRecord> = {};
+    const latest: Record<string, WeatherRecord> = {};
     weather.forEach((w) => {
-      if (
-        !byDistrict[w.district] ||
-        w.recorded_at > byDistrict[w.district].recorded_at
-      ) {
-        byDistrict[w.district] = w;
-      }
+      if (!latest[w.district] || w.recorded_at > latest[w.district].recorded_at)
+        latest[w.district] = w;
     });
-
-    Object.values(byDistrict).forEach((w) => {
+    Object.values(latest).forEach((w) => {
       const coords = knownDistricts[w.district];
       if (!coords) return;
       const isDrought = w.drought_index_display >= DROUGHT_THRESHOLD;
       const isFlood = w.flood_risk_score_display >= FLOOD_THRESHOLD;
-      const isAlert = isDrought || isFlood;
       const color = isDrought ? "#dc2626" : isFlood ? "#0891b2" : "#16a34a";
       const emoji = isDrought ? "🌵" : isFlood ? "🌊" : "🌿";
       const icon = L.divIcon({
@@ -406,26 +787,22 @@ export default function InsurerDashboard() {
       markersRef.current.push(
         L.marker(coords, { icon }).addTo(map).bindPopup(`
           <div style="font-family:sans-serif;font-size:12px;line-height:1.9;min-width:170px">
-            <strong style="font-size:13px">${w.district}, ${w.country}</strong><br/>
+            <strong>${w.district}, ${w.country}</strong><br/>
             🌧 Rainfall: <strong>${w.rainfall_mm_display} mm</strong><br/>
-            🌵 Drought: <strong>${(w.drought_index_display * 100).toFixed(1)}%</strong>
-              ${isDrought ? '<span style="color:#dc2626"> ⚠ High</span>' : ""}<br/>
-            🌊 Flood risk: <strong>${(w.flood_risk_score_display * 100).toFixed(1)}%</strong>
-              ${isFlood ? '<span style="color:#0891b2"> ⚠ Elevated</span>' : ""}<br/>
+            🌵 Drought: <strong>${(w.drought_index_display * 100).toFixed(1)}%</strong>${isDrought ? '<span style="color:#dc2626"> ⚠</span>' : ""}<br/>
+            🌊 Flood: <strong>${(w.flood_risk_score_display * 100).toFixed(1)}%</strong>${isFlood ? '<span style="color:#0891b2"> ⚠</span>' : ""}<br/>
             <span style="color:#9ca3af;font-size:11px">${new Date(w.recorded_at).toLocaleString()}</span>
           </div>`),
       );
     });
-
     if (markersRef.current.length > 0) {
       try {
-        const grp = L.featureGroup(markersRef.current);
-        map.fitBounds(grp.getBounds().pad(0.3));
+        map.fitBounds(L.featureGroup(markersRef.current).getBounds().pad(0.3));
       } catch (_) {}
     }
   }, [weather]);
 
-  // ── Create policy ────────────────────────────────────────────────────────────
+  // Create policy
   const handleCreatePolicy = async (e: React.FormEvent) => {
     e.preventDefault();
     const insurerId = form.insurer_id || user?.partner_id;
@@ -443,8 +820,8 @@ export default function InsurerDashboard() {
       const body = {
         name: form.name,
         description: form.description,
-        coverage_amount_per_event: Number(form.coverage_amount_per_event),
-        premium_amount: Number(form.premium_amount),
+        coverage_amount_display: Number(form.coverage_amount_display),
+        premium_amount_display: Number(form.premium_amount_display),
         currency: form.currency,
         qod_drop_threshold_pct: Number(form.qod_drop_threshold_pct),
         consecutive_readings_required: Number(
@@ -485,17 +862,15 @@ export default function InsurerDashboard() {
     }
   };
 
-  const openAlert = (
+  const openSim = (
     item: SignalReading | WeatherRecord,
     type: "signal" | "weather",
   ) => {
-    setAlertItem(item);
-    setAlertType(type);
-    setPayoutDone(false);
-    setAlertOpen(true);
+    setSimItem(item);
+    setSimType(type);
+    setSimOpen(true);
   };
 
-  // ── Stats (corrected thresholds) ─────────────────────────────────────────────
   const anomalousCount = signals.filter((s) => s.is_anomalous).length;
   const droughtCount = weather.filter(
     (w) => w.drought_index_display >= DROUGHT_THRESHOLD,
@@ -504,9 +879,7 @@ export default function InsurerDashboard() {
     (w) => w.flood_risk_score_display >= FLOOD_THRESHOLD,
   ).length;
   const activePolicies = policies.filter((p) => p.status === "active").length;
-
-  // Latest weather reading for quick summary
-  const latestWeather = weather[0];
+  const latestWeather = weather[0] ?? null;
   const avgDrought = weather.length
     ? weather.reduce((s, w) => s + w.drought_index_display, 0) / weather.length
     : 0;
@@ -523,7 +896,7 @@ export default function InsurerDashboard() {
 
   if (!user)
     return (
-      <div className="flex items-center justify-center h-screen text-slate-600 font-medium">
+      <div className="flex items-center justify-center h-screen text-slate-600">
         Authenticating…
       </div>
     );
@@ -531,21 +904,17 @@ export default function InsurerDashboard() {
   return (
     <div className="flex h-screen bg-slate-50">
       <DashboardSidebar user={user} />
-
       <div className="flex-1 flex flex-col overflow-hidden">
         <DashboardHeader user={user} />
-
         <main className="flex-1 overflow-y-auto overflow-x-hidden">
-          {/* Hero banner */}
-          <div className="bg-gradient-to-r from-slate-800 via-slate-700 to-slate-800 text-white px-8 py-6 border-b border-slate-600">
-            <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+          {/* Hero */}
+          <div className="bg-gradient-to-r from-slate-800 via-slate-700 to-slate-800 text-white px-8 py-6">
+            <div className="max-w-7xl mx-auto flex items-center justify-between gap-4 flex-wrap">
               <div>
-                <div className="flex items-center gap-2 text-slate-400 text-xs mb-1">
-                  <span>Dashboard</span>
-                  <span>/</span>
-                  <span>Insurer</span>
-                </div>
-                <h1 className="text-2xl font-bold tracking-tight">
+                <p className="text-slate-400 text-xs mb-1">
+                  Dashboard / Insurer
+                </p>
+                <h1 className="text-2xl font-bold">
                   {insurer?.partner.name ?? "Insurer Dashboard"}
                 </h1>
                 {insurer && (
@@ -556,8 +925,8 @@ export default function InsurerDashboard() {
                 )}
               </div>
               <div className="flex items-center gap-3">
-                {(anomalousCount > 0 || droughtCount > 0 || floodCount > 0) && (
-                  <div className="flex items-center gap-2 bg-red-500/20 border border-red-400/30 rounded-lg px-3 py-2 text-red-300 text-sm font-medium animate-pulse">
+                {anomalousCount + droughtCount + floodCount > 0 && (
+                  <div className="flex items-center gap-2 bg-red-500/20 border border-red-400/30 rounded-lg px-3 py-2 text-red-300 text-sm animate-pulse">
                     <AlertTriangle className="w-4 h-4" />
                     {anomalousCount + droughtCount + floodCount} alert
                     {anomalousCount + droughtCount + floodCount !== 1
@@ -605,17 +974,17 @@ export default function InsurerDashboard() {
                   alert: anomalousCount > 0,
                 },
                 {
-                  label: "Drought Alerts",
+                  label: "Drought Watch",
                   value: droughtCount,
-                  sub: `index ≥ ${DROUGHT_THRESHOLD * 100}%`,
+                  sub: `≥ ${DROUGHT_THRESHOLD * 100}% index`,
                   color: "from-amber-500 to-orange-600",
                   icon: TrendingDown,
                   alert: droughtCount > 0,
                 },
                 {
-                  label: "Flood Alerts",
+                  label: "Flood Watch",
                   value: floodCount,
-                  sub: `risk ≥ ${FLOOD_THRESHOLD * 100}%`,
+                  sub: `≥ ${FLOOD_THRESHOLD * 100}% risk score`,
                   color: "from-cyan-500 to-cyan-600",
                   icon: CloudRain,
                   alert: floodCount > 0,
@@ -623,7 +992,7 @@ export default function InsurerDashboard() {
               ].map(({ label, value, sub, color, icon: Icon, alert }) => (
                 <Card
                   key={label}
-                  className={`border-0 shadow-md bg-gradient-to-br ${color} text-white overflow-hidden relative`}
+                  className={`border-0 shadow-md bg-gradient-to-br ${color} text-white relative overflow-hidden`}
                 >
                   {alert && value > 0 && (
                     <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-white animate-ping" />
@@ -662,7 +1031,7 @@ export default function InsurerDashboard() {
               ))}
             </div>
 
-            {/* ── OVERVIEW TAB ── */}
+            {/* ── OVERVIEW ── */}
             {tab === "overview" && (
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <Card className="shadow-md border-slate-100">
@@ -687,7 +1056,7 @@ export default function InsurerDashboard() {
                         ].map(([k, v]) => (
                           <div key={k}>
                             <p className="text-slate-400 text-xs">{k}</p>
-                            <p className="font-medium text-slate-700 capitalize">
+                            <p className="font-medium text-slate-700 truncate">
                               {v}
                             </p>
                           </div>
@@ -695,17 +1064,16 @@ export default function InsurerDashboard() {
                       </div>
                     ) : (
                       <p className="text-slate-400 text-sm">
-                        Profile not loaded — ensure{" "}
-                        <code className="text-xs bg-slate-100 px-1 rounded">
+                        Profile not loaded —{" "}
+                        <code className="bg-slate-100 px-1 rounded text-xs">
                           partner_id
                         </code>{" "}
-                        is stored in the session.
+                        must be in session.
                       </p>
                     )}
                   </CardContent>
                 </Card>
 
-                {/* Weather summary card */}
                 {latestWeather && (
                   <Card className="shadow-md border-slate-100">
                     <CardHeader className="pb-3">
@@ -720,9 +1088,7 @@ export default function InsurerDashboard() {
                     <CardContent className="space-y-4">
                       <div className="grid grid-cols-3 gap-3 text-center">
                         <div className="bg-blue-50 rounded-lg p-3">
-                          <p className="text-xs text-blue-500 font-medium mb-1">
-                            Rainfall
-                          </p>
+                          <p className="text-xs text-blue-500 mb-1">Rainfall</p>
                           <p className="text-2xl font-bold text-blue-700">
                             {latestWeather.rainfall_mm_display}
                           </p>
@@ -731,9 +1097,7 @@ export default function InsurerDashboard() {
                         <div
                           className={`rounded-lg p-3 ${latestWeather.drought_index_display >= DROUGHT_THRESHOLD ? "bg-red-50" : "bg-amber-50"}`}
                         >
-                          <p className="text-xs text-amber-600 font-medium mb-1">
-                            Drought
-                          </p>
+                          <p className="text-xs text-amber-600 mb-1">Drought</p>
                           <p
                             className={`text-2xl font-bold ${latestWeather.drought_index_display >= DROUGHT_THRESHOLD ? "text-red-700" : "text-amber-700"}`}
                           >
@@ -742,15 +1106,11 @@ export default function InsurerDashboard() {
                             ).toFixed(1)}
                             %
                           </p>
-                          {latestWeather.drought_index_display >=
-                            DROUGHT_THRESHOLD && (
-                            <p className="text-xs text-red-500">⚠ Alert</p>
-                          )}
                         </div>
                         <div
                           className={`rounded-lg p-3 ${latestWeather.flood_risk_score_display >= FLOOD_THRESHOLD ? "bg-cyan-50" : "bg-slate-50"}`}
                         >
-                          <p className="text-xs text-cyan-600 font-medium mb-1">
+                          <p className="text-xs text-cyan-600 mb-1">
                             Flood Risk
                           </p>
                           <p
@@ -761,23 +1121,11 @@ export default function InsurerDashboard() {
                             ).toFixed(1)}
                             %
                           </p>
-                          {latestWeather.flood_risk_score_display >=
-                            FLOOD_THRESHOLD && (
-                            <p className="text-xs text-cyan-500">⚠ Elevated</p>
-                          )}
                         </div>
                       </div>
-                      <div className="text-xs text-slate-400 flex items-center justify-between pt-1 border-t border-slate-100">
-                        <span>Source: {latestWeather.data_source}</span>
-                        <span>
-                          {new Date(latestWeather.recorded_at).toLocaleString()}
-                        </span>
-                      </div>
-                      <div className="space-y-2">
-                        <div className="flex justify-between text-xs text-slate-500">
-                          <span>
-                            Avg drought index ({weather.length} readings)
-                          </span>
+                      <div className="space-y-1.5 text-xs text-slate-500">
+                        <div className="flex justify-between">
+                          <span>Avg drought ({weather.length} readings)</span>
                           <span
                             className={pctColor(avgDrought, DROUGHT_THRESHOLD)}
                           >
@@ -786,16 +1134,18 @@ export default function InsurerDashboard() {
                         </div>
                         <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
                           <div
-                            className={`h-full rounded-full ${avgDrought >= DROUGHT_THRESHOLD ? "bg-red-500" : "bg-amber-400"}`}
+                            className="h-full rounded-full bg-amber-400"
                             style={{
                               width: `${Math.min(avgDrought * 100, 100)}%`,
                             }}
                           />
                         </div>
-                        <div className="flex justify-between text-xs text-slate-500">
-                          <span>Peak rainfall today</span>
+                        <div className="flex justify-between border-t border-slate-100 pt-1">
+                          <span>
+                            Peak rainfall · Source: {latestWeather.data_source}
+                          </span>
                           <span className="text-blue-600 font-medium">
-                            {maxRainfall} mm
+                            {maxRainfall.toFixed(2)} mm
                           </span>
                         </div>
                       </div>
@@ -803,14 +1153,13 @@ export default function InsurerDashboard() {
                   </Card>
                 )}
 
-                {/* Map */}
                 <Card className="shadow-md border-slate-100 overflow-hidden">
                   <CardHeader className="pb-3">
                     <CardTitle className="text-slate-800 text-base flex items-center gap-2">
                       <MapPin className="w-4 h-4 text-emerald-500" />
                       Coverage Map
                       <span className="ml-auto text-xs text-slate-400 font-normal">
-                        Latest reading per district
+                        Latest per district
                       </span>
                     </CardTitle>
                   </CardHeader>
@@ -822,14 +1171,13 @@ export default function InsurerDashboard() {
                   </CardContent>
                 </Card>
 
-                {/* Recent alerts */}
                 <Card className="shadow-md border-slate-100">
                   <CardHeader className="pb-3">
                     <CardTitle className="text-slate-800 text-base flex items-center gap-2">
                       <AlertTriangle className="w-4 h-4 text-red-500" />
                       Recent Alerts
                       <Badge className="ml-auto bg-red-100 text-red-700">
-                        {anomalousCount + droughtCount + floodCount} total
+                        {anomalousCount + droughtCount + floodCount}
                       </Badge>
                     </CardTitle>
                   </CardHeader>
@@ -843,7 +1191,7 @@ export default function InsurerDashboard() {
                             key={s.id}
                             type="signal"
                             item={s}
-                            onOpen={() => openAlert(s, "signal")}
+                            onOpen={() => openSim(s, "signal")}
                           />
                         ))}
                       {weather
@@ -858,12 +1206,12 @@ export default function InsurerDashboard() {
                             key={w.id}
                             type="weather"
                             item={w}
-                            onOpen={() => openAlert(w, "weather")}
+                            onOpen={() => openSim(w, "weather")}
                           />
                         ))}
                       {anomalousCount + droughtCount + floodCount === 0 && (
                         <p className="text-slate-400 text-sm text-center py-4">
-                          No active alerts
+                          No active alerts — all readings within normal range
                         </p>
                       )}
                     </div>
@@ -872,12 +1220,12 @@ export default function InsurerDashboard() {
               </div>
             )}
 
-            {/* ── POLICIES TAB ── */}
+            {/* ── POLICIES ── */}
             {tab === "policies" && (
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <p className="text-slate-600 text-sm">
-                    {policies.length} policies found
+                    {policies.length} policies
                   </p>
                   <Dialog open={policyOpen} onOpenChange={setPolicyOpen}>
                     <DialogTrigger asChild>
@@ -897,12 +1245,11 @@ export default function InsurerDashboard() {
                         onSubmit={handleCreatePolicy}
                         className="space-y-5 mt-2"
                       >
-                        {/* Insurer ID — pre-filled, editable override */}
                         <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-2">
                           <Label className="text-sm font-semibold text-blue-800">
-                            Insurer ID *
-                            <span className="ml-2 text-blue-500 font-normal text-xs">
-                              (pre-filled from your session)
+                            Insurer ID *{" "}
+                            <span className="text-blue-500 font-normal text-xs">
+                              (pre-filled from session)
                             </span>
                           </Label>
                           <Input
@@ -910,90 +1257,57 @@ export default function InsurerDashboard() {
                             onChange={(e) =>
                               setForm({ ...form, insurer_id: e.target.value })
                             }
-                            placeholder="e58b3142-f466-41b4-8278-4236dcf92a94"
+                            placeholder="UUID"
                             required
                             className="border-blue-200 focus:border-blue-400 font-mono text-xs"
                           />
-                          <p className="text-xs text-blue-600">
-                            Policy will be created under:{" "}
-                            <code className="bg-blue-100 px-1 rounded">
-                              /policies/insurers/{"{insurer_id}"}
-                            </code>
-                          </p>
                         </div>
-
                         <fieldset className="space-y-3">
                           <legend className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
                             Basic Info
                           </legend>
-                          <div className="space-y-1">
-                            <Label className="text-sm font-medium text-slate-700">
-                              Policy Name *
-                            </Label>
-                            <Input
-                              value={form.name}
-                              onChange={(e) =>
-                                setForm({ ...form, name: e.target.value })
-                              }
-                              placeholder="e.g. Maize Drought Protection Plan"
-                              required
-                              className="border-slate-200 focus:border-blue-400"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <Label className="text-sm font-medium text-slate-700">
-                              Description
-                            </Label>
-                            <textarea
-                              value={form.description}
-                              onChange={(e) =>
-                                setForm({
-                                  ...form,
-                                  description: e.target.value,
-                                })
-                              }
-                              placeholder="Describe the policy coverage…"
-                              rows={2}
-                              className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none"
-                            />
-                          </div>
+                          <Input
+                            value={form.name}
+                            onChange={(e) =>
+                              setForm({ ...form, name: e.target.value })
+                            }
+                            placeholder="Policy name *"
+                            required
+                            className="border-slate-200"
+                          />
+                          <textarea
+                            value={form.description}
+                            onChange={(e) =>
+                              setForm({ ...form, description: e.target.value })
+                            }
+                            placeholder="Description"
+                            rows={2}
+                            className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none"
+                          />
                           <div className="grid grid-cols-3 gap-3">
+                            {[
+                              ["Coverage/Event", "coverage_amount_display"],
+                              ["Premium", "premium_amount_display"],
+                            ].map(([l, k]) => (
+                              <div key={k} className="space-y-1">
+                                <Label className="text-xs text-slate-600">
+                                  {l}
+                                </Label>
+                                <Input
+                                  type="number"
+                                  value={(form as any)[k]}
+                                  onChange={(e) =>
+                                    setForm({
+                                      ...form,
+                                      [k]: Number(e.target.value),
+                                    })
+                                  }
+                                  className="border-slate-200"
+                                />
+                              </div>
+                            ))}
                             <div className="space-y-1">
-                              <Label className="text-sm font-medium text-slate-700">
-                                Coverage / Event
-                              </Label>
-                              <Input
-                                type="number"
-                                value={form.coverage_amount_per_event}
-                                onChange={(e) =>
-                                  setForm({
-                                    ...form,
-                                    coverage_amount_per_event: Number(
-                                      e.target.value,
-                                    ),
-                                  })
-                                }
-                                className="border-slate-200 focus:border-blue-400"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <Label className="text-sm font-medium text-slate-700">
-                                Premium
-                              </Label>
-                              <Input
-                                type="number"
-                                value={form.premium_amount}
-                                onChange={(e) =>
-                                  setForm({
-                                    ...form,
-                                    premium_amount: Number(e.target.value),
-                                  })
-                                }
-                                className="border-slate-200 focus:border-blue-400"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <Label className="text-sm font-medium text-slate-700">
+                              <Label className="text-xs text-slate-600">
                                 Currency
                               </Label>
                               <select
@@ -1001,7 +1315,7 @@ export default function InsurerDashboard() {
                                 onChange={(e) =>
                                   setForm({ ...form, currency: e.target.value })
                                 }
-                                className="w-full h-10 border border-slate-200 rounded-md px-3 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-300"
+                                className="w-full h-10 border border-slate-200 rounded-md px-3 text-sm bg-white"
                               >
                                 {["UGX", "KES", "TZS", "USD", "EUR"].map(
                                   (c) => (
@@ -1012,49 +1326,39 @@ export default function InsurerDashboard() {
                             </div>
                           </div>
                         </fieldset>
-
                         <fieldset className="space-y-3">
                           <legend className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
                             Trigger Rules
                           </legend>
                           <div className="grid grid-cols-2 gap-3">
                             {[
-                              {
-                                label: "QoD Drop Threshold (%)",
-                                key: "qod_drop_threshold_pct",
-                              },
-                              {
-                                label: "Consecutive Readings",
-                                key: "consecutive_readings_required",
-                              },
-                              { label: "Payout %", key: "payout_pct" },
-                              {
-                                label: "Neighbour Min Count",
-                                key: "neighbour_min_count",
-                              },
-                              {
-                                label: "Per-event Cap",
-                                key: "per_event_cap_amt",
-                              },
-                              {
-                                label: "Per-season Cap",
-                                key: "per_season_cap_amt",
-                              },
-                            ].map(({ label, key }) => (
-                              <div key={key} className="space-y-1">
-                                <Label className="text-sm font-medium text-slate-700">
-                                  {label}
+                              [
+                                "QoD Drop Threshold (%)",
+                                "qod_drop_threshold_pct",
+                              ],
+                              [
+                                "Consecutive Readings",
+                                "consecutive_readings_required",
+                              ],
+                              ["Payout %", "payout_pct"],
+                              ["Neighbour Min", "neighbour_min_count"],
+                              ["Per-event Cap", "per_event_cap_amt"],
+                              ["Per-season Cap", "per_season_cap_amt"],
+                            ].map(([l, k]) => (
+                              <div key={k} className="space-y-1">
+                                <Label className="text-xs text-slate-600">
+                                  {l}
                                 </Label>
                                 <Input
                                   type="number"
-                                  value={(form as any)[key]}
+                                  value={(form as any)[k]}
                                   onChange={(e) =>
                                     setForm({
                                       ...form,
-                                      [key]: Number(e.target.value),
+                                      [k]: Number(e.target.value),
                                     })
                                   }
-                                  className="border-slate-200 focus:border-blue-400"
+                                  className="border-slate-200"
                                 />
                               </div>
                             ))}
@@ -1063,106 +1367,71 @@ export default function InsurerDashboard() {
                             {[
                               [
                                 "weather_corroboration_required",
-                                "Require weather corroboration",
+                                "Weather corroboration",
                               ],
-                              [
-                                "neighbour_check_required",
-                                "Require neighbour check",
-                              ],
-                            ].map(([key, label]) => (
+                              ["neighbour_check_required", "Neighbour check"],
+                            ].map(([k, l]) => (
                               <label
-                                key={key}
+                                key={k}
                                 className="flex items-center gap-2 cursor-pointer"
                               >
                                 <input
                                   type="checkbox"
-                                  checked={(form as any)[key]}
+                                  checked={(form as any)[k]}
                                   onChange={(e) =>
-                                    setForm({
-                                      ...form,
-                                      [key]: e.target.checked,
-                                    })
+                                    setForm({ ...form, [k]: e.target.checked })
                                   }
-                                  className="rounded border-slate-300 text-blue-500"
                                 />
-                                <span className="text-slate-700">{label}</span>
+                                <span className="text-slate-700">{l}</span>
                               </label>
                             ))}
                           </div>
                         </fieldset>
-
                         <fieldset className="space-y-3">
                           <legend className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
-                            Coverage Scope
+                            Scope
                           </legend>
                           <div className="grid grid-cols-2 gap-3">
-                            <div className="space-y-1">
-                              <Label className="text-sm font-medium text-slate-700">
-                                Crop Type
-                              </Label>
-                              <Input
-                                value={form.crop_type}
-                                onChange={(e) =>
-                                  setForm({
-                                    ...form,
-                                    crop_type: e.target.value,
-                                  })
-                                }
-                                placeholder="e.g. Maize"
-                                className="border-slate-200 focus:border-blue-400"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <Label className="text-sm font-medium text-slate-700">
-                                Country
-                              </Label>
-                              <select
-                                value={form.country}
-                                onChange={(e) =>
-                                  setForm({ ...form, country: e.target.value })
-                                }
-                                className="w-full h-10 border border-slate-200 rounded-md px-3 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-300"
-                              >
-                                {["UG", "KE", "TZ", "RW"].map((c) => (
-                                  <option key={c}>{c}</option>
-                                ))}
-                              </select>
-                            </div>
-                            <div className="space-y-1">
-                              <Label className="text-sm font-medium text-slate-700">
-                                Region Name
-                              </Label>
-                              <Input
-                                value={form.region_name}
-                                onChange={(e) =>
-                                  setForm({
-                                    ...form,
-                                    region_name: e.target.value,
-                                  })
-                                }
-                                placeholder="e.g. Central"
-                                className="border-slate-200 focus:border-blue-400"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <Label className="text-sm font-medium text-slate-700">
-                                Districts (comma-separated)
-                              </Label>
-                              <Input
-                                value={form.districts}
-                                onChange={(e) =>
-                                  setForm({
-                                    ...form,
-                                    districts: e.target.value,
-                                  })
-                                }
-                                placeholder="Mukono, Wakiso"
-                                className="border-slate-200 focus:border-blue-400"
-                              />
-                            </div>
+                            <Input
+                              value={form.crop_type}
+                              onChange={(e) =>
+                                setForm({ ...form, crop_type: e.target.value })
+                              }
+                              placeholder="Crop type"
+                              className="border-slate-200"
+                            />
+                            <select
+                              value={form.country}
+                              onChange={(e) =>
+                                setForm({ ...form, country: e.target.value })
+                              }
+                              className="h-10 border border-slate-200 rounded-md px-3 text-sm bg-white"
+                            >
+                              {["UG", "KE", "TZ", "RW"].map((c) => (
+                                <option key={c}>{c}</option>
+                              ))}
+                            </select>
+                            <Input
+                              value={form.region_name}
+                              onChange={(e) =>
+                                setForm({
+                                  ...form,
+                                  region_name: e.target.value,
+                                })
+                              }
+                              placeholder="Region name"
+                              className="border-slate-200"
+                            />
+                            <Input
+                              value={form.districts}
+                              onChange={(e) =>
+                                setForm({ ...form, districts: e.target.value })
+                              }
+                              placeholder="Districts (comma-separated)"
+                              className="border-slate-200"
+                            />
                           </div>
                         </fieldset>
-
                         {formError && (
                           <div className="bg-red-50 border-l-4 border-red-400 rounded p-3 text-sm text-red-800">
                             {formError}
@@ -1179,11 +1448,10 @@ export default function InsurerDashboard() {
                     </DialogContent>
                   </Dialog>
                 </div>
-
                 {policies.length === 0 ? (
                   <div className="text-center py-16 text-slate-400">
                     <FileText className="w-12 h-12 mx-auto mb-3 opacity-20" />
-                    <p>No policies yet — create your first one above.</p>
+                    <p>No policies yet.</p>
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -1200,50 +1468,45 @@ export default function InsurerDashboard() {
                                   {p.name}
                                 </h3>
                                 <Badge
-                                  className={`text-xs flex-shrink-0 ${
-                                    p.status === "active"
-                                      ? "bg-green-100 text-green-800"
-                                      : p.status === "draft"
-                                        ? "bg-slate-100 text-slate-600"
-                                        : "bg-red-100 text-red-700"
-                                  }`}
+                                  className={`text-xs flex-shrink-0 ${p.status === "active" ? "bg-green-100 text-green-800" : p.status === "draft" ? "bg-slate-100 text-slate-600" : "bg-red-100 text-red-700"}`}
                                 >
                                   {p.status}
                                 </Badge>
                               </div>
                               <p className="text-slate-500 text-xs mb-2 line-clamp-1">
-                                {p.description}
+                                {p.description || "No description provided"}
                               </p>
                               <div className="flex flex-wrap gap-3 text-xs text-slate-600">
                                 <span>
                                   Coverage:{" "}
                                   <strong>
-                                    {fmt(
-                                      p.coverage_amount_per_event,
-                                      p.currency,
-                                    )}
+                                    {fmt(p.coverage_amount_display, p.currency)}
                                   </strong>
                                 </span>
                                 <span>
                                   Premium:{" "}
                                   <strong>
-                                    {fmt(p.premium_amount, p.currency)}
+                                    {fmt(p.premium_amount_display, p.currency)}
                                   </strong>
                                 </span>
-                                <span>
-                                  QoD:{" "}
-                                  <strong>{p.qod_drop_threshold_pct}%</strong>
-                                </span>
-                                <span>
-                                  Payout: <strong>{p.payout_pct}%</strong>
-                                </span>
+                                {p.qod_drop_threshold_pct && (
+                                  <span>
+                                    QoD:{" "}
+                                    <strong>{p.qod_drop_threshold_pct}%</strong>
+                                  </span>
+                                )}
+                                {p.payout_pct && (
+                                  <span>
+                                    Payout: <strong>{p.payout_pct}%</strong>
+                                  </span>
+                                )}
                               </div>
                             </div>
                             <button
                               onClick={() =>
                                 setExp(expandedPolicy === p.id ? null : p.id)
                               }
-                              className="text-slate-400 hover:text-slate-600 flex-shrink-0 mt-0.5"
+                              className="text-slate-400 hover:text-slate-600 flex-shrink-0"
                             >
                               {expandedPolicy === p.id ? (
                                 <ChevronUp className="w-5 h-5" />
@@ -1254,61 +1517,76 @@ export default function InsurerDashboard() {
                           </div>
                           {expandedPolicy === p.id && (
                             <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-2 gap-4 text-xs">
-                              <div>
-                                <p className="text-slate-400 font-semibold uppercase tracking-wide mb-2">
-                                  Crops
-                                </p>
-                                {(p.crops ?? []).map((c, i) => (
-                                  <Badge
-                                    key={i}
-                                    variant="outline"
-                                    className="mr-1 border-green-300 text-green-700"
-                                  >
-                                    {c.crop_type}
-                                  </Badge>
-                                ))}
-                              </div>
-                              <div>
-                                <p className="text-slate-400 font-semibold uppercase tracking-wide mb-2">
-                                  Regions
-                                </p>
-                                {(p.regions ?? []).map((r, i) => (
-                                  <div key={i} className="mb-1">
-                                    <span className="font-medium text-slate-700">
-                                      {r.region_name}, {r.country}
-                                    </span>
-                                    <span className="text-slate-400 ml-1">
-                                      —{" "}
-                                      {r.districts
-                                        .map((d) => d.district_name)
-                                        .join(", ")}
-                                    </span>
-                                  </div>
-                                ))}
-                              </div>
-                              <div>
-                                <p className="text-slate-400 font-semibold uppercase tracking-wide mb-2">
-                                  Caps
-                                </p>
-                                <p>
-                                  Per event:{" "}
-                                  {fmt(p.per_event_cap_amt, p.currency)}
-                                </p>
-                                <p>
-                                  Per season:{" "}
-                                  {fmt(p.per_season_cap_amt, p.currency)}
-                                </p>
-                              </div>
-                              <div>
-                                <p className="text-slate-400 font-semibold uppercase tracking-wide mb-2">
-                                  Trigger
-                                </p>
-                                <p>
-                                  {p.consecutive_readings_required} consecutive
-                                  readings
-                                </p>
-                                <p>Drop ≥ {p.qod_drop_threshold_pct}%</p>
-                              </div>
+                              {p.crops && p.crops.length > 0 && (
+                                <div>
+                                  <p className="text-slate-400 font-semibold uppercase mb-2">
+                                    Crops
+                                  </p>
+                                  {p.crops.map((c, i) => (
+                                    <Badge
+                                      key={i}
+                                      variant="outline"
+                                      className="mr-1 border-green-300 text-green-700"
+                                    >
+                                      {c.crop_type}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              )}
+                              {p.regions && p.regions.length > 0 && (
+                                <div>
+                                  <p className="text-slate-400 font-semibold uppercase mb-2">
+                                    Regions
+                                  </p>
+                                  {p.regions.map((r, i) => (
+                                    <div key={i}>
+                                      <span className="font-medium text-slate-700">
+                                        {r.region_name}, {r.country}
+                                      </span>
+                                      <span className="text-slate-400 ml-1">
+                                        —{" "}
+                                        {r.districts
+                                          .map((d) => d.district_name)
+                                          .join(", ")}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                              {(p.per_event_cap_amt ||
+                                p.per_season_cap_amt) && (
+                                <div>
+                                  <p className="text-slate-400 font-semibold uppercase mb-2">
+                                    Caps
+                                  </p>
+                                  {p.per_event_cap_amt && (
+                                    <p>
+                                      Per event:{" "}
+                                      {fmt(p.per_event_cap_amt, p.currency)}
+                                    </p>
+                                  )}
+                                  {p.per_season_cap_amt && (
+                                    <p>
+                                      Per season:{" "}
+                                      {fmt(p.per_season_cap_amt, p.currency)}
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+                              {p.consecutive_readings_required && (
+                                <div>
+                                  <p className="text-slate-400 font-semibold uppercase mb-2">
+                                    Trigger
+                                  </p>
+                                  <p>
+                                    {p.consecutive_readings_required} readings
+                                    required
+                                  </p>
+                                  {p.qod_drop_threshold_pct && (
+                                    <p>Drop ≥ {p.qod_drop_threshold_pct}%</p>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           )}
                         </CardContent>
@@ -1319,70 +1597,65 @@ export default function InsurerDashboard() {
               </div>
             )}
 
-            {/* ── SIGNALS TAB ── */}
+            {/* ── SIGNALS ── */}
             {tab === "signals" && (
               <div className="space-y-4">
                 <Card className="shadow-sm border-slate-100">
-                  <CardContent className="p-4">
-                    <div className="flex flex-wrap gap-3 items-end">
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-500">
-                          Farmer ID
-                        </Label>
-                        <Input
-                          value={sigFilter.farmer_id}
-                          onChange={(e) =>
-                            setSigFilter({
-                              ...sigFilter,
-                              farmer_id: e.target.value,
-                            })
-                          }
-                          placeholder="UUID…"
-                          className="h-8 text-sm w-52 border-slate-200"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-500">MSISDN</Label>
-                        <Input
-                          value={sigFilter.msisdn}
-                          onChange={(e) =>
-                            setSigFilter({
-                              ...sigFilter,
-                              msisdn: e.target.value,
-                            })
-                          }
-                          placeholder="+256…"
-                          className="h-8 text-sm w-40 border-slate-200"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-500">
-                          Anomalous
-                        </Label>
-                        <select
-                          value={sigFilter.anomalous}
-                          onChange={(e) =>
-                            setSigFilter({
-                              ...sigFilter,
-                              anomalous: e.target.value,
-                            })
-                          }
-                          className="h-8 border border-slate-200 rounded-md px-2 text-sm bg-white"
-                        >
-                          <option value="">All</option>
-                          <option value="true">Yes</option>
-                          <option value="false">No</option>
-                        </select>
-                      </div>
-                      <Button
-                        onClick={fetchSignals}
-                        size="sm"
-                        className="bg-slate-700 hover:bg-slate-800 text-white h-8"
-                      >
-                        <RefreshCw className="w-3 h-3 mr-1.5" />
-                        Apply
-                      </Button>
+                  <CardContent className="p-4 flex flex-wrap gap-3 items-end">
+                    <div className="space-y-1">
+                      <Label className="text-xs text-slate-500">
+                        Farmer ID
+                      </Label>
+                      <Input
+                        value={sigFilter.farmer_id}
+                        onChange={(e) =>
+                          setSigFilter({
+                            ...sigFilter,
+                            farmer_id: e.target.value,
+                          })
+                        }
+                        placeholder="UUID…"
+                        className="h-8 text-sm w-52 border-slate-200"
+                      />
                     </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-slate-500">MSISDN</Label>
+                      <Input
+                        value={sigFilter.msisdn}
+                        onChange={(e) =>
+                          setSigFilter({ ...sigFilter, msisdn: e.target.value })
+                        }
+                        placeholder="+256…"
+                        className="h-8 text-sm w-40 border-slate-200"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-slate-500">
+                        Anomalous
+                      </Label>
+                      <select
+                        value={sigFilter.anomalous}
+                        onChange={(e) =>
+                          setSigFilter({
+                            ...sigFilter,
+                            anomalous: e.target.value,
+                          })
+                        }
+                        className="h-8 border border-slate-200 rounded-md px-2 text-sm bg-white"
+                      >
+                        <option value="">All</option>
+                        <option value="true">Yes</option>
+                        <option value="false">No</option>
+                      </select>
+                    </div>
+                    <Button
+                      onClick={fetchSignals}
+                      size="sm"
+                      className="bg-slate-700 hover:bg-slate-800 text-white h-8"
+                    >
+                      <RefreshCw className="w-3 h-3 mr-1.5" />
+                      Apply
+                    </Button>
                   </CardContent>
                 </Card>
                 <Card className="shadow-md border-slate-100">
@@ -1456,10 +1729,11 @@ export default function InsurerDashboard() {
                                   {s.is_anomalous && (
                                     <Button
                                       size="sm"
-                                      onClick={() => openAlert(s, "signal")}
-                                      className="bg-red-600 hover:bg-red-700 text-white text-xs h-7 px-2"
+                                      onClick={() => openSim(s, "signal")}
+                                      className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-7 px-2"
                                     >
-                                      Review
+                                      <Banknote className="w-3 h-3 mr-1" />
+                                      Simulate Payout
                                     </Button>
                                   )}
                                 </TableCell>
@@ -1474,131 +1748,110 @@ export default function InsurerDashboard() {
               </div>
             )}
 
-            {/* ── WEATHER TAB ── */}
+            {/* ── WEATHER ── */}
             {tab === "weather" && (
               <div className="space-y-4">
-                {/* Filters — now includes data_source and date range */}
                 <Card className="shadow-sm border-slate-100">
-                  <CardContent className="p-4">
-                    <div className="flex flex-wrap gap-3 items-end">
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-500">
-                          District
-                        </Label>
-                        <Input
-                          value={wxFilter.district}
-                          onChange={(e) =>
-                            setWxFilter({
-                              ...wxFilter,
-                              district: e.target.value,
-                            })
-                          }
-                          placeholder="e.g. Masaka"
-                          className="h-8 text-sm w-36 border-slate-200"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-500">
-                          Country
-                        </Label>
-                        <select
-                          value={wxFilter.country}
-                          onChange={(e) =>
-                            setWxFilter({
-                              ...wxFilter,
-                              country: e.target.value,
-                            })
-                          }
-                          className="h-8 border border-slate-200 rounded-md px-2 text-sm bg-white"
-                        >
-                          <option value="">All</option>
-                          {["UG", "KE", "TZ", "RW"].map((c) => (
-                            <option key={c}>{c}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-500">
-                          Data Source
-                        </Label>
-                        <select
-                          value={wxFilter.data_source}
-                          onChange={(e) =>
-                            setWxFilter({
-                              ...wxFilter,
-                              data_source: e.target.value,
-                            })
-                          }
-                          className="h-8 border border-slate-200 rounded-md px-2 text-sm bg-white"
-                        >
-                          <option value="">All</option>
-                          <option value="open-meteo">open-meteo (live)</option>
-                          <option value="open-meteo-archive">
-                            open-meteo-archive
-                          </option>
-                        </select>
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-500">From</Label>
-                        <Input
-                          type="datetime-local"
-                          value={wxFilter.from_dt}
-                          onChange={(e) =>
-                            setWxFilter({
-                              ...wxFilter,
-                              from_dt: e.target.value,
-                            })
-                          }
-                          className="h-8 text-xs border-slate-200 w-44"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-500">To</Label>
-                        <Input
-                          type="datetime-local"
-                          value={wxFilter.to_dt}
-                          onChange={(e) =>
-                            setWxFilter({ ...wxFilter, to_dt: e.target.value })
-                          }
-                          className="h-8 text-xs border-slate-200 w-44"
-                        />
-                      </div>
-                      <Button
-                        onClick={fetchWeather}
-                        size="sm"
-                        className="bg-slate-700 hover:bg-slate-800 text-white h-8"
-                      >
-                        <RefreshCw className="w-3 h-3 mr-1.5" />
-                        Apply
-                      </Button>
-                      {(wxFilter.district ||
-                        wxFilter.country ||
-                        wxFilter.data_source ||
-                        wxFilter.from_dt ||
-                        wxFilter.to_dt) && (
-                        <Button
-                          onClick={() =>
-                            setWxFilter({
-                              district: "",
-                              country: "",
-                              data_source: "",
-                              from_dt: "",
-                              to_dt: "",
-                            })
-                          }
-                          size="sm"
-                          variant="outline"
-                          className="h-8 text-xs border-slate-200 text-slate-500 bg-white hover:bg-slate-50"
-                        >
-                          <X className="w-3 h-3 mr-1" />
-                          Clear
-                        </Button>
-                      )}
+                  <CardContent className="p-4 flex flex-wrap gap-3 items-end">
+                    <div className="space-y-1">
+                      <Label className="text-xs text-slate-500">District</Label>
+                      <Input
+                        value={wxFilter.district}
+                        onChange={(e) =>
+                          setWxFilter({ ...wxFilter, district: e.target.value })
+                        }
+                        placeholder="e.g. Masaka"
+                        className="h-8 text-sm w-36 border-slate-200"
+                      />
                     </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-slate-500">Country</Label>
+                      <select
+                        value={wxFilter.country}
+                        onChange={(e) =>
+                          setWxFilter({ ...wxFilter, country: e.target.value })
+                        }
+                        className="h-8 border border-slate-200 rounded-md px-2 text-sm bg-white"
+                      >
+                        <option value="">All</option>
+                        {["UG", "KE", "TZ", "RW"].map((c) => (
+                          <option key={c}>{c}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-slate-500">Source</Label>
+                      <select
+                        value={wxFilter.data_source}
+                        onChange={(e) =>
+                          setWxFilter({
+                            ...wxFilter,
+                            data_source: e.target.value,
+                          })
+                        }
+                        className="h-8 border border-slate-200 rounded-md px-2 text-sm bg-white"
+                      >
+                        <option value="">All</option>
+                        <option value="open-meteo">open-meteo</option>
+                        <option value="open-meteo-archive">archive</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-slate-500">From</Label>
+                      <Input
+                        type="datetime-local"
+                        value={wxFilter.from_dt}
+                        onChange={(e) =>
+                          setWxFilter({ ...wxFilter, from_dt: e.target.value })
+                        }
+                        className="h-8 text-xs border-slate-200 w-44"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-slate-500">To</Label>
+                      <Input
+                        type="datetime-local"
+                        value={wxFilter.to_dt}
+                        onChange={(e) =>
+                          setWxFilter({ ...wxFilter, to_dt: e.target.value })
+                        }
+                        className="h-8 text-xs border-slate-200 w-44"
+                      />
+                    </div>
+                    <Button
+                      onClick={fetchWeather}
+                      size="sm"
+                      className="bg-slate-700 hover:bg-slate-800 text-white h-8"
+                    >
+                      <RefreshCw className="w-3 h-3 mr-1.5" />
+                      Apply
+                    </Button>
+                    {(wxFilter.district ||
+                      wxFilter.country ||
+                      wxFilter.data_source ||
+                      wxFilter.from_dt ||
+                      wxFilter.to_dt) && (
+                      <Button
+                        onClick={() =>
+                          setWxFilter({
+                            district: "",
+                            country: "",
+                            data_source: "",
+                            from_dt: "",
+                            to_dt: "",
+                          })
+                        }
+                        size="sm"
+                        variant="outline"
+                        className="h-8 text-xs border-slate-200 text-slate-500 bg-white"
+                      >
+                        <X className="w-3 h-3 mr-1" />
+                        Clear
+                      </Button>
+                    )}
                   </CardContent>
                 </Card>
 
-                {/* Weather summary mini-cards */}
                 {weather.length > 0 && (
                   <div className="grid grid-cols-3 gap-4">
                     {[
@@ -1609,7 +1862,7 @@ export default function InsurerDashboard() {
                         bg: "bg-blue-50",
                       },
                       {
-                        label: "Avg Drought Index",
+                        label: "Avg Drought",
                         value: `${((weather.reduce((s, w) => s + w.drought_index_display, 0) / weather.length) * 100).toFixed(1)}%`,
                         color: "text-amber-700",
                         bg: "bg-amber-50",
@@ -1690,7 +1943,7 @@ export default function InsurerDashboard() {
                                     {w.country}
                                   </TableCell>
                                   <TableCell>
-                                    <span className="flex items-center gap-1 text-blue-600 font-semibold">
+                                    <span className="flex items-center gap-1 text-blue-600 font-semibold text-sm">
                                       <CloudRain className="w-3 h-3" />
                                       {w.rainfall_mm_display.toFixed(2)}
                                     </span>
@@ -1719,14 +1972,19 @@ export default function InsurerDashboard() {
                                     </Badge>
                                   </TableCell>
                                   <TableCell>
-                                    {isAlert && (
+                                    {isAlert ? (
                                       <Button
                                         size="sm"
-                                        onClick={() => openAlert(w, "weather")}
-                                        className={`text-white text-xs h-7 px-2 ${isDrought ? "bg-amber-600 hover:bg-amber-700" : "bg-cyan-600 hover:bg-cyan-700"}`}
+                                        onClick={() => openSim(w, "weather")}
+                                        className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-7 px-2"
                                       >
-                                        {isDrought ? "🌵 Drought" : "🌊 Flood"}
+                                        <Banknote className="w-3 h-3 mr-1" />
+                                        Simulate Payout
                                       </Button>
+                                    ) : (
+                                      <span className="text-slate-300 text-xs">
+                                        Normal
+                                      </span>
                                     )}
                                   </TableCell>
                                 </TableRow>
@@ -1744,140 +2002,29 @@ export default function InsurerDashboard() {
         </main>
       </div>
 
-      {/* Alert / Payout dialog */}
-      <Dialog open={alertOpen} onOpenChange={setAlertOpen}>
-        <DialogContent className="max-w-md">
+      <Dialog
+        open={simOpen}
+        onOpenChange={(open) => {
+          if (!open) setSimOpen(false);
+        }}
+      >
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-slate-800">
-              <AlertTriangle className="w-5 h-5 text-red-500" />
-              {alertType === "signal" ? "QoD Anomaly Alert" : "Weather Alert"}
+              <Banknote className="w-5 h-5 text-emerald-500" />
+              Payout Simulation Engine
+              <Badge className="ml-2 bg-amber-100 text-amber-700 text-xs font-normal">
+                Demo Mode
+              </Badge>
             </DialogTitle>
           </DialogHeader>
-          {alertItem && (
-            <div className="space-y-4 mt-2">
-              {alertType === "signal" ? (
-                <div className="bg-red-50 rounded-lg p-4 text-sm space-y-1.5 border border-red-100">
-                  <p>
-                    <span className="text-slate-500">Farmer:</span>{" "}
-                    <strong>
-                      {(alertItem as SignalReading).farmer_name ??
-                        (alertItem as SignalReading).farmer_id}
-                    </strong>
-                  </p>
-                  <p>
-                    <span className="text-slate-500">MSISDN:</span>{" "}
-                    <strong>{(alertItem as SignalReading).msisdn}</strong>
-                  </p>
-                  <p>
-                    <span className="text-slate-500">QoD Value:</span>{" "}
-                    <strong>
-                      {(alertItem as SignalReading).qod_value?.toFixed(2)}
-                    </strong>
-                  </p>
-                  <p>
-                    <span className="text-slate-500">Drop:</span>{" "}
-                    <strong className="text-red-600">
-                      {(alertItem as SignalReading).drop_pct?.toFixed(1)}%
-                    </strong>
-                  </p>
-                  <p>
-                    <span className="text-slate-500">Recorded:</span>{" "}
-                    {new Date(
-                      (alertItem as SignalReading).recorded_at,
-                    ).toLocaleString()}
-                  </p>
-                  <p className="text-red-700 font-medium pt-1">
-                    ⚠ Signal quality breached policy threshold — possible crop
-                    stress detected.
-                  </p>
-                </div>
-              ) : (
-                <div className="bg-amber-50 rounded-lg p-4 text-sm space-y-2 border border-amber-100">
-                  <p>
-                    <span className="text-slate-500">District:</span>{" "}
-                    <strong>
-                      {(alertItem as WeatherRecord).district},{" "}
-                      {(alertItem as WeatherRecord).country}
-                    </strong>
-                  </p>
-                  <p>
-                    <span className="text-slate-500">Rainfall:</span>{" "}
-                    <strong>
-                      {(alertItem as WeatherRecord).rainfall_mm_display} mm
-                    </strong>
-                  </p>
-                  <div>
-                    <span className="text-slate-500">Drought Index: </span>
-                    {pctBar(
-                      (alertItem as WeatherRecord).drought_index_display,
-                      DROUGHT_THRESHOLD,
-                    )}
-                  </div>
-                  <div>
-                    <span className="text-slate-500">Flood Risk: </span>
-                    {pctBar(
-                      (alertItem as WeatherRecord).flood_risk_score_display,
-                      FLOOD_THRESHOLD,
-                    )}
-                  </div>
-                  <p>
-                    <span className="text-slate-500">Source:</span>{" "}
-                    {(alertItem as WeatherRecord).data_source}
-                  </p>
-                  <p className="text-amber-700 font-medium pt-1">
-                    ⚠ Weather conditions indicate elevated{" "}
-                    {(alertItem as WeatherRecord).drought_index_display >=
-                    DROUGHT_THRESHOLD
-                      ? "drought"
-                      : "flood"}{" "}
-                    risk for enrolled farmers in this district.
-                  </p>
-                </div>
-              )}
-              {!payoutDone ? (
-                <div className="space-y-3">
-                  <p className="text-slate-600 text-sm">
-                    If conditions meet policy criteria, confirm to queue a
-                    payout to eligible farmers.
-                  </p>
-                  <div className="flex gap-3">
-                    <Button
-                      onClick={() => setPayoutDone(true)}
-                      className="flex-1 bg-green-600 hover:bg-green-700 text-white"
-                    >
-                      <CheckCircle className="w-4 h-4 mr-2" />
-                      Confirm Payout
-                    </Button>
-                    <Button
-                      variant="outline"
-                      onClick={() => setAlertOpen(false)}
-                      className="flex-1 border-slate-300 text-slate-600 hover:bg-slate-50 bg-white"
-                    >
-                      <X className="w-4 h-4 mr-2" />
-                      Dismiss
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-center space-y-2">
-                  <CheckCircle className="w-8 h-8 text-green-500 mx-auto" />
-                  <p className="font-semibold text-green-800">
-                    Payout Confirmed
-                  </p>
-                  <p className="text-green-600 text-sm">
-                    Payment queued for eligible farmers. The engine will
-                    disburse funds per active policy terms.
-                  </p>
-                  <Button
-                    onClick={() => setAlertOpen(false)}
-                    variant="outline"
-                    className="mt-2 border-green-300 text-green-700 hover:bg-green-100 bg-white"
-                  >
-                    Close
-                  </Button>
-                </div>
-              )}
-            </div>
+          {simItem && (
+            <PayoutSimulator
+              item={simItem}
+              type={simType}
+              policies={policies}
+              onClose={() => setSimOpen(false)}
+            />
           )}
         </DialogContent>
       </Dialog>
@@ -1885,7 +2032,7 @@ export default function InsurerDashboard() {
   );
 }
 
-// ─── Alert row sub-component ───────────────────────────────────────────────────
+//  Alert row
 function AlertRow({
   type,
   item,
@@ -1916,9 +2063,10 @@ function AlertRow({
         <Button
           size="sm"
           onClick={onOpen}
-          className="bg-red-600 hover:bg-red-700 text-white text-xs h-7 px-3"
+          className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-7 px-3"
         >
-          Review
+          <Banknote className="w-3 h-3 mr-1" />
+          Simulate
         </Button>
       </div>
     );
@@ -1953,9 +2101,10 @@ function AlertRow({
       <Button
         size="sm"
         onClick={onOpen}
-        className={`text-white text-xs h-7 px-3 ${isDrought ? "bg-amber-600 hover:bg-amber-700" : "bg-cyan-600 hover:bg-cyan-700"}`}
+        className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-7 px-3"
       >
-        Review
+        <Banknote className="w-3 h-3 mr-1" />
+        Simulate
       </Button>
     </div>
   );
