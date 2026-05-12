@@ -153,13 +153,13 @@ Open [http://localhost:3000](http://localhost:3000) to view the app.
 
 Select your role at the login screen. Each role authenticates against the appropriate API and is redirected to its dashboard.
 
-| Role          | Label        | API           | Redirects to            |
-| ------------- | ------------ | ------------- | ----------------------- |
-| `fieldworker` | Field Agent  | AgroSignal    | `/dashboard/fieldagent` |
-| `insurer`     | Insurer      | AgroSignal    | `/dashboard/insurer`    |
-| `schooladmin` | School Admin | Hygiene Quest | `/dashboard/school`     |
-| `manager`     | Manager      | AgroSignal    | `/dashboard`            |
-| `superadmin`  | Super Admin  | AgroSignal    | `/dashboard`            |
+| Role            | Label        | API        | Redirects to            |
+| --------------- | ------------ | ---------- | ----------------------- |
+| `fieldworker`   | Field Agent  | AgroSignal | `/dashboard/fieldagent` |
+| `insurer`       | Insurer      | AgroSignal | `/dashboard/insurer`    |
+| `platformadmin` | School Admin | AgroSIgnal | `/dashboard/school`     |
+| `manager`       | Manager      | AgroSignal | `/dashboard`            |
+| `superadmin`    | Super Admin  | AgroSignal | `/dashboard`            |
 
 ---
 
